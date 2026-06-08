@@ -1,0 +1,6 @@
+com\campus\trade\service\OrderServiceTest.class
+com\campus\trade\service\PaymentServiceTest.class
+com\campus\trade\statemachine\OrderStateMachineTest.class
+com\campus\trade\service\InventoryServiceTest.class
+com\campus\trade\service\RefundServiceTest.class
+com\campus\trade\CampusTradeApplicationTests.class

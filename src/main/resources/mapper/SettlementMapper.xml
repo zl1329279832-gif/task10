@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.SettlementMapper">
+
+    <resultMap id="BaseResultMap" type="com.campus.trade.model.entity.Settlement">
+        <id column="id" property="id"/>
+        <result column="settlement_no" property="settlementNo"/>
+        <result column="order_no" property="orderNo"/>
+        <result column="seller_id" property="sellerId"/>
+        <result column="amount" property="amount"/>
+        <result column="platform_fee" property="platformFee"/>
+        <result column="actual_amount" property="actualAmount"/>
+        <result column="status" property="status"/>
+        <result column="settled_at" property="settledAt"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <select id="selectBySettlementNo" resultMap="BaseResultMap">
+        SELECT * FROM t_settlement WHERE settlement_no = #{settlementNo}
+    </select>
+
+    <select id="selectByOrderNo" resultMap="BaseResultMap">
+        SELECT * FROM t_settlement WHERE order_no = #{orderNo} LIMIT 1
+    </select>
+
+    <select id="selectBySellerId" resultMap="BaseResultMap">
+        SELECT * FROM t_settlement WHERE seller_id = #{sellerId} ORDER BY created_at DESC LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countBySellerId" resultType="long">
+        SELECT COUNT(*) FROM t_settlement WHERE seller_id = #{sellerId}
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT * FROM t_settlement ORDER BY created_at DESC LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM t_settlement
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_settlement (settlement_no, order_no, seller_id, amount, platform_fee, actual_amount, status)
+        VALUES (#{settlementNo}, #{orderNo}, #{sellerId}, #{amount}, #{platformFee}, #{actualAmount}, #{status})
+    </insert>
+
+    <update id="updateStatus">
+        UPDATE t_settlement SET status = #{status}, settled_at = NOW() WHERE settlement_no = #{settlementNo}
+    </update>
+</mapper>

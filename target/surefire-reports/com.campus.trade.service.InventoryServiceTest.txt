@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.campus.trade.service.InventoryServiceTest
+-------------------------------------------------------------------------------
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.241 s -- in com.campus.trade.service.InventoryServiceTest

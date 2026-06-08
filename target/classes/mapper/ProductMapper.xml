@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.ProductMapper">
+
+    <resultMap id="BaseResultMap" type="com.campus.trade.model.entity.Product">
+        <id column="id" property="id"/>
+        <result column="seller_id" property="sellerId"/>
+        <result column="title" property="title"/>
+        <result column="description" property="description"/>
+        <result column="price" property="price"/>
+        <result column="stock" property="stock"/>
+        <result column="category" property="category"/>
+        <result column="image_urls" property="imageUrls"/>
+        <result column="status" property="status"/>
+        <result column="version" property="version"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <select id="selectById" resultMap="BaseResultMap">
+        SELECT * FROM t_product WHERE id = #{id}
+    </select>
+
+    <select id="selectByCondition" resultMap="BaseResultMap">
+        SELECT * FROM t_product
+        <where>
+            <if test="sellerId != null">AND seller_id = #{sellerId}</if>
+            <if test="category != null and category != ''">AND category = #{category}</if>
+            <if test="keyword != null and keyword != ''">AND title LIKE CONCAT('%', #{keyword}, '%')</if>
+            <if test="status != null">AND status = #{status}</if>
+        </where>
+        ORDER BY created_at DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countByCondition" resultType="long">
+        SELECT COUNT(*) FROM t_product
+        <where>
+            <if test="sellerId != null">AND seller_id = #{sellerId}</if>
+            <if test="category != null and category != ''">AND category = #{category}</if>
+            <if test="keyword != null and keyword != ''">AND title LIKE CONCAT('%', #{keyword}, '%')</if>
+            <if test="status != null">AND status = #{status}</if>
+        </where>
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_product (seller_id, title, description, price, stock, category, image_urls, status, version)
+        VALUES (#{sellerId}, #{title}, #{description}, #{price}, #{stock}, #{category}, #{imageUrls}, #{status}, 0)
+    </insert>
+
+    <update id="updateById">
+        UPDATE t_product
+        <set>
+            <if test="title != null">title = #{title},</if>
+            <if test="description != null">description = #{description},</if>
+            <if test="price != null">price = #{price},</if>
+            <if test="stock != null">stock = #{stock},</if>
+            <if test="category != null">category = #{category},</if>
+            <if test="imageUrls != null">image_urls = #{imageUrls},</if>
+            version = version + 1,
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE t_product SET status = #{status} WHERE id = #{id}
+    </update>
+
+    <update id="deductStock">
+        UPDATE t_product SET stock = stock - #{quantity}, version = version + 1
+        WHERE id = #{id} AND stock >= #{quantity} AND version = #{version}
+    </update>
+
+    <update id="restoreStock">
+        UPDATE t_product SET stock = stock + #{quantity}, version = version + 1
+        WHERE id = #{id}
+    </update>
+</mapper>

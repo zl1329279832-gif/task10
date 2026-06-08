@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.AuditLogMapper">
+
+    <resultMap id="BaseResultMap" type="com.campus.trade.model.entity.AuditLogEntity">
+        <id column="id" property="id"/>
+        <result column="user_id" property="userId"/>
+        <result column="username" property="username"/>
+        <result column="module" property="module"/>
+        <result column="action" property="action"/>
+        <result column="target_type" property="targetType"/>
+        <result column="target_id" property="targetId"/>
+        <result column="detail" property="detail"/>
+        <result column="ip_address" property="ipAddress"/>
+        <result column="created_at" property="createdAt"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_audit_log (user_id, username, module, action, target_type, target_id, detail, ip_address)
+        VALUES (#{userId}, #{username}, #{module}, #{action}, #{targetType}, #{targetId}, #{detail}, #{ipAddress})
+    </insert>
+
+    <select id="selectByCondition" resultMap="BaseResultMap">
+        SELECT * FROM t_audit_log
+        <where>
+            <if test="module != null and module != ''">AND module = #{module}</if>
+            <if test="action != null and action != ''">AND action = #{action}</if>
+            <if test="targetType != null and targetType != ''">AND target_type = #{targetType}</if>
+            <if test="targetId != null and targetId != ''">AND target_id = #{targetId}</if>
+            <if test="userId != null">AND user_id = #{userId}</if>
+        </where>
+        ORDER BY created_at DESC LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countByCondition" resultType="long">
+        SELECT COUNT(*) FROM t_audit_log
+        <where>
+            <if test="module != null and module != ''">AND module = #{module}</if>
+            <if test="action != null and action != ''">AND action = #{action}</if>
+            <if test="targetType != null and targetType != ''">AND target_type = #{targetType}</if>
+            <if test="targetId != null and targetId != ''">AND target_id = #{targetId}</if>
+            <if test="userId != null">AND user_id = #{userId}</if>
+        </where>
+    </select>
+</mapper>

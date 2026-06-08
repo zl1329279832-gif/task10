@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.OrderMapper">
+
+    <resultMap id="BaseResultMap" type="com.campus.trade.model.entity.Order">
+        <id column="id" property="id"/>
+        <result column="order_no" property="orderNo"/>
+        <result column="buyer_id" property="buyerId"/>
+        <result column="seller_id" property="sellerId"/>
+        <result column="product_id" property="productId"/>
+        <result column="product_title" property="productTitle"/>
+        <result column="quantity" property="quantity"/>
+        <result column="unit_price" property="unitPrice"/>
+        <result column="total_amount" property="totalAmount"/>
+        <result column="status" property="status"/>
+        <result column="payment_deadline" property="paymentDeadline"/>
+        <result column="paid_at" property="paidAt"/>
+        <result column="shipped_at" property="shippedAt"/>
+        <result column="received_at" property="receivedAt"/>
+        <result column="closed_at" property="closedAt"/>
+        <result column="close_reason" property="closeReason"/>
+        <result column="idempotent_key" property="idempotentKey"/>
+        <result column="version" property="version"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <select id="selectByOrderNo" resultMap="BaseResultMap">
+        SELECT * FROM t_order WHERE order_no = #{orderNo}
+    </select>
+
+    <select id="selectByIdempotentKey" resultMap="BaseResultMap">
+        SELECT * FROM t_order WHERE idempotent_key = #{idempotentKey}
+    </select>
+
+    <select id="selectByBuyerId" resultMap="BaseResultMap">
+        SELECT * FROM t_order WHERE buyer_id = #{buyerId}
+        <if test="status != null and status != ''">AND status = #{status}</if>
+        ORDER BY created_at DESC LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countByBuyerId" resultType="long">
+        SELECT COUNT(*) FROM t_order WHERE buyer_id = #{buyerId}
+        <if test="status != null and status != ''">AND status = #{status}</if>
+    </select>
+
+    <select id="selectBySellerId" resultMap="BaseResultMap">
+        SELECT * FROM t_order WHERE seller_id = #{sellerId}
+        <if test="status != null and status != ''">AND status = #{status}</if>
+        ORDER BY created_at DESC LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countBySellerId" resultType="long">
+        SELECT COUNT(*) FROM t_order WHERE seller_id = #{sellerId}
+        <if test="status != null and status != ''">AND status = #{status}</if>
+    </select>
+
+    <select id="selectTimeoutOrders" resultMap="BaseResultMap">
+        SELECT * FROM t_order WHERE status = 'PENDING_PAYMENT' AND payment_deadline &lt; NOW()
+    </select>
+
+    <select id="selectAll" resultMap="BaseResultMap">
+        SELECT * FROM t_order
+        <where>
+            <if test="status != null and status != ''">AND status = #{status}</if>
+        </where>
+        ORDER BY created_at DESC LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countAll" resultType="long">
+        SELECT COUNT(*) FROM t_order
+        <where>
+            <if test="status != null and status != ''">AND status = #{status}</if>
+        </where>
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO t_order (order_no, buyer_id, seller_id, product_id, product_title, quantity,
+                             unit_price, total_amount, status, payment_deadline, idempotent_key, version)
+        VALUES (#{orderNo}, #{buyerId}, #{sellerId}, #{productId}, #{productTitle}, #{quantity},
+                #{unitPrice}, #{totalAmount}, #{status}, #{paymentDeadline}, #{idempotentKey}, 0)
+    </insert>
+
+    <update id="updateStatusWithVersion">
+        UPDATE t_order SET status = #{newStatus}, version = version + 1
+        WHERE order_no = #{orderNo} AND version = #{version}
+    </update>
+
+    <update id="updatePaidAt">
+        UPDATE t_order SET status = #{newStatus}, paid_at = NOW(), version = version + 1
+        WHERE order_no = #{orderNo} AND version = #{version}
+    </update>
+
+    <update id="updateShippedAt">
+        UPDATE t_order SET status = #{newStatus}, shipped_at = NOW(), version = version + 1
+        WHERE order_no = #{orderNo} AND version = #{version}
+    </update>
+
+    <update id="updateReceivedAt">
+        UPDATE t_order SET status = #{newStatus}, received_at = NOW(), version = version + 1
+        WHERE order_no = #{orderNo} AND version = #{version}
+    </update>
+
+    <update id="updateClosed">
+        UPDATE t_order SET status = #{newStatus}, closed_at = NOW(), close_reason = #{closeReason}, version = version + 1
+        WHERE order_no = #{orderNo} AND version = #{version}
+    </update>
+</mapper>
