@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.PaymentMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.Payment">
+        <id column="id" property="id"/><result column="payment_no" property="paymentNo"/><result column="order_id" property="orderId"/>
+        <result column="order_no" property="orderNo"/><result column="trade_no" property="tradeNo"/><result column="amount" property="amount"/>
+        <result column="pay_channel" property="payChannel"/><result column="status" property="status"/><result column="callback_content" property="callbackContent"/>
+        <result column="notify_count" property="notifyCount"/><result column="paid_at" property="paidAt"/><result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <select id="findById" resultMap="BaseResult">SELECT * FROM t_payment WHERE id=#{id}</select>
+    <select id="findByPaymentNo" resultMap="BaseResult">SELECT * FROM t_payment WHERE payment_no=#{paymentNo}</select>
+    <select id="findByOrderNo" resultMap="BaseResult">SELECT * FROM t_payment WHERE order_no=#{orderNo} ORDER BY created_at DESC LIMIT 1</select>
+    <select id="findByOrderId" resultMap="BaseResult">SELECT * FROM t_payment WHERE order_id=#{orderId} ORDER BY created_at DESC LIMIT 1</select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_payment (payment_no,order_id,order_no,amount,pay_channel,status) VALUES (#{paymentNo},#{orderId},#{orderNo},#{amount},#{payChannel},#{status})</insert>
+    <update id="updateStatus">UPDATE t_payment SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
+    <update id="updateTradeNo">UPDATE t_payment SET trade_no=#{tradeNo}, paid_at=#{paidAt}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="incrementNotifyCount">UPDATE t_payment SET notify_count=notify_count+1, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateCallbackContent">UPDATE t_payment SET callback_content=#{content}, updated_at=NOW() WHERE id=#{id}</update>
+</mapper>

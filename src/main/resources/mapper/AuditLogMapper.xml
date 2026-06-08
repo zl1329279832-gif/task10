@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.AuditLogMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.AuditLog">
+        <id column="id" property="id"/><result column="user_id" property="userId"/><result column="username" property="username"/>
+        <result column="module" property="module"/><result column="action" property="action"/><result column="target_type" property="targetType"/>
+        <result column="target_id" property="targetId"/><result column="detail" property="detail"/><result column="ip" property="ip"/><result column="created_at" property="createdAt"/>
+    </resultMap>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_audit_log (user_id,username,module,action,target_type,target_id,detail,ip) VALUES (#{userId},#{username},#{module},#{action},#{targetType},#{targetId},#{detail},#{ip})</insert>
+    <select id="findByModule" resultMap="BaseResult">SELECT * FROM t_audit_log <if test="module!=null and module!=''"> WHERE module=#{module}</if> ORDER BY created_at DESC LIMIT #{offset},#{limit}</select>
+    <select id="countByModule" resultType="long">SELECT COUNT(*) FROM t_audit_log <if test="module!=null and module!=''"> WHERE module=#{module}</if></select>
+    <select id="findByUserId" resultMap="BaseResult">SELECT * FROM t_audit_log WHERE user_id=#{userId} ORDER BY created_at DESC LIMIT #{offset},#{limit}</select>
+    <select id="findByTarget" resultMap="BaseResult">SELECT * FROM t_audit_log WHERE target_type=#{targetType} AND target_id=#{targetId} ORDER BY created_at ASC</select>
+</mapper>

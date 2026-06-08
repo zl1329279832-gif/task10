@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.DisputeEvidenceMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.DisputeEvidence">
+        <id column="id" property="id"/><result column="dispute_id" property="disputeId"/><result column="submitter_id" property="submitterId"/>
+        <result column="content" property="content"/><result column="image_urls" property="imageUrls"/><result column="created_at" property="createdAt"/>
+    </resultMap>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_dispute_evidence (dispute_id,submitter_id,content,image_urls) VALUES (#{disputeId},#{submitterId},#{content},#{imageUrls})</insert>
+    <select id="findByDisputeId" resultMap="BaseResult">SELECT * FROM t_dispute_evidence WHERE dispute_id=#{disputeId} ORDER BY created_at ASC</select>
+</mapper>

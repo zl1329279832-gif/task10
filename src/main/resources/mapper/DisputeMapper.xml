@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.DisputeMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.Dispute">
+        <id column="id" property="id"/><result column="dispute_no" property="disputeNo"/><result column="order_id" property="orderId"/>
+        <result column="order_no" property="orderNo"/><result column="initiator_id" property="initiatorId"/><result column="respondent_id" property="respondentId"/>
+        <result column="reason" property="reason"/><result column="evidence_urls" property="evidenceUrls"/><result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <select id="findById" resultMap="BaseResult">SELECT * FROM t_dispute WHERE id=#{id}</select>
+    <select id="findByDisputeNo" resultMap="BaseResult">SELECT * FROM t_dispute WHERE dispute_no=#{disputeNo}</select>
+    <select id="findByOrderId" resultMap="BaseResult">SELECT * FROM t_dispute WHERE order_id=#{orderId} ORDER BY created_at DESC LIMIT 1</select>
+    <select id="findAll" resultMap="BaseResult">SELECT * FROM t_dispute <if test="status!=null and status!=''"> WHERE status=#{status}</if> ORDER BY created_at DESC LIMIT #{offset},#{limit}</select>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM t_dispute <if test="status!=null and status!=''"> WHERE status=#{status}</if></select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_dispute (dispute_no,order_id,order_no,initiator_id,respondent_id,reason,evidence_urls,status) VALUES (#{disputeNo},#{orderId},#{orderNo},#{initiatorId},#{respondentId},#{reason},#{evidenceUrls},#{status})</insert>
+    <update id="updateStatus">UPDATE t_dispute SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
+</mapper>

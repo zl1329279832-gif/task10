@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.UserMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.User">
+        <id column="id" property="id"/><result column="username" property="username"/><result column="password" property="password"/>
+        <result column="nickname" property="nickname"/><result column="avatar" property="avatar"/><result column="phone" property="phone"/>
+        <result column="email" property="email"/><result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <select id="findById" resultMap="BaseResult">SELECT * FROM t_user WHERE id = #{id}</select>
+    <select id="findByUsername" resultMap="BaseResult">SELECT * FROM t_user WHERE username = #{username}</select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_user (username,password,nickname,avatar,phone,email,status) VALUES (#{username},#{password},#{nickname},#{avatar},#{phone},#{email},#{status})</insert>
+    <update id="updateStatus">UPDATE t_user SET status=#{status} WHERE id=#{id}</update>
+</mapper>

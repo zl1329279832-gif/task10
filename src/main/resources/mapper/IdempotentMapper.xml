@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.IdempotentMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.Idempotent">
+        <id column="id" property="id"/><result column="idempotent_key" property="idempotentKey"/><result column="biz_type" property="bizType"/>
+        <result column="status" property="status"/><result column="result" property="result"/><result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_idempotent (idempotent_key,biz_type,status) VALUES (#{idempotentKey},#{bizType},#{status})</insert>
+    <select id="findByKey" resultMap="BaseResult">SELECT * FROM t_idempotent WHERE biz_type=#{bizType} AND idempotent_key=#{idempotentKey}</select>
+    <update id="updateStatus">UPDATE t_idempotent SET status=#{status}, result=#{result}, updated_at=NOW() WHERE id=#{id}</update>
+</mapper>

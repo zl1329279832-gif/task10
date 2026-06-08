@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.OrderMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.Order">
+        <id column="id" property="id"/><result column="order_no" property="orderNo"/><result column="buyer_id" property="buyerId"/>
+        <result column="seller_id" property="sellerId"/><result column="product_id" property="productId"/><result column="sku_id" property="skuId"/>
+        <result column="sku_name" property="skuName"/><result column="quantity" property="quantity"/><result column="unit_price" property="unitPrice"/>
+        <result column="total_amount" property="totalAmount"/><result column="status" property="status"/>
+        <result column="pay_time" property="payTime"/><result column="ship_time" property="shipTime"/><result column="receive_time" property="receiveTime"/>
+        <result column="close_time" property="closeTime"/><result column="close_reason" property="closeReason"/>
+        <result column="logistics_no" property="logisticsNo"/><result column="logistics_company" property="logisticsCompany"/>
+        <result column="address" property="address"/><result column="remark" property="remark"/>
+        <result column="pay_expire_at" property="payExpireAt"/><result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <select id="findById" resultMap="BaseResult">SELECT * FROM t_order WHERE id=#{id}</select>
+    <select id="findByOrderNo" resultMap="BaseResult">SELECT * FROM t_order WHERE order_no=#{orderNo}</select>
+    <select id="findByBuyerId" resultMap="BaseResult">SELECT * FROM t_order WHERE buyer_id=#{buyerId} <if test="status!=null and status!=''"> AND status=#{status}</if> ORDER BY created_at DESC LIMIT #{offset},#{limit}</select>
+    <select id="countByBuyerId" resultType="long">SELECT COUNT(*) FROM t_order WHERE buyer_id=#{buyerId} <if test="status!=null and status!=''"> AND status=#{status}</if></select>
+    <select id="findBySellerId" resultMap="BaseResult">SELECT * FROM t_order WHERE seller_id=#{sellerId} <if test="status!=null and status!=''"> AND status=#{status}</if> ORDER BY created_at DESC LIMIT #{offset},#{limit}</select>
+    <select id="countBySellerId" resultType="long">SELECT COUNT(*) FROM t_order WHERE seller_id=#{sellerId} <if test="status!=null and status!=''"> AND status=#{status}</if></select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_order (order_no,buyer_id,seller_id,product_id,sku_id,sku_name,quantity,unit_price,total_amount,status,address,remark,pay_expire_at) VALUES (#{orderNo},#{buyerId},#{sellerId},#{productId},#{skuId},#{skuName},#{quantity},#{unitPrice},#{totalAmount},#{status},#{address},#{remark},#{payExpireAt})</insert>
+    <update id="updateStatus">UPDATE t_order SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
+    <update id="updatePayInfo">UPDATE t_order SET pay_time=#{payTime}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateShipInfo">UPDATE t_order SET logistics_no=#{logisticsNo}, logistics_company=#{logisticsCompany}, ship_time=#{shipTime}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateReceiveInfo">UPDATE t_order SET receive_time=#{receiveTime}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateCloseInfo">UPDATE t_order SET close_time=#{closeTime}, close_reason=#{closeReason}, updated_at=NOW() WHERE id=#{id}</update>
+    <select id="findExpiredOrders" resultMap="BaseResult">SELECT * FROM t_order WHERE status='CREATED' AND pay_expire_at &lt; NOW() ORDER BY pay_expire_at ASC LIMIT #{limit}</select>
+</mapper>

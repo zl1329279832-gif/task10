@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.SkuMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.Sku">
+        <id column="id" property="id"/><result column="product_id" property="productId"/><result column="sku_name" property="skuName"/>
+        <result column="price" property="price"/><result column="stock" property="stock"/><result column="lock_stock" property="lockStock"/>
+        <result column="status" property="status"/><result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <select id="findById" resultMap="BaseResult">SELECT * FROM t_sku WHERE id=#{id}</select>
+    <select id="findByProductId" resultMap="BaseResult">SELECT * FROM t_sku WHERE product_id=#{productId} AND status=1</select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_sku (product_id,sku_name,price,stock,lock_stock,status) VALUES (#{productId},#{skuName},#{price},#{stock},#{lockStock},#{status})</insert>
+    <update id="updateStock">UPDATE t_sku SET stock=#{stock} WHERE id=#{id}</update>
+    <update id="lockStock">UPDATE t_sku SET lock_stock=lock_stock+#{quantity} WHERE id=#{id} AND status=1 AND (stock-lock_stock)&gt;=#{quantity}</update>
+    <update id="releaseLockStock">UPDATE t_sku SET lock_stock=lock_stock-#{quantity} WHERE id=#{id} AND lock_stock&gt;=#{quantity}</update>
+    <update id="deductLockStock">UPDATE t_sku SET stock=stock-#{quantity}, lock_stock=lock_stock-#{quantity} WHERE id=#{id} AND stock&gt;=#{quantity} AND lock_stock&gt;=#{quantity}</update>
+</mapper>
