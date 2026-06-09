@@ -5,14 +5,20 @@
         <id column="id" property="id"/><result column="settlement_no" property="settlementNo"/><result column="order_id" property="orderId"/>
         <result column="order_no" property="orderNo"/><result column="seller_id" property="sellerId"/><result column="order_amount" property="orderAmount"/>
         <result column="platform_fee" property="platformFee"/><result column="settle_amount" property="settleAmount"/><result column="status" property="status"/>
-        <result column="settled_at" property="settledAt"/><result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+        <result column="settled_at" property="settledAt"/>
+        <result column="frozen_amount" property="frozenAmount"/><result column="freeze_reason" property="freezeReason"/><result column="frozen_at" property="frozenAt"/>
+        <result column="escrow_amount" property="escrowAmount"/><result column="retry_count" property="retryCount"/>
+        <result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
     </resultMap>
     <select id="findById" resultMap="BaseResult">SELECT * FROM t_settlement WHERE id=#{id}</select>
     <select id="findBySettlementNo" resultMap="BaseResult">SELECT * FROM t_settlement WHERE settlement_no=#{settlementNo}</select>
     <select id="findByOrderId" resultMap="BaseResult">SELECT * FROM t_settlement WHERE order_id=#{orderId}</select>
     <select id="findBySellerId" resultMap="BaseResult">SELECT * FROM t_settlement WHERE seller_id=#{sellerId} <if test="status!=null and status!=''"> AND status=#{status}</if> ORDER BY created_at DESC LIMIT #{offset},#{limit}</select>
     <select id="countBySellerId" resultType="long">SELECT COUNT(*) FROM t_settlement WHERE seller_id=#{sellerId} <if test="status!=null and status!=''"> AND status=#{status}</if></select>
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_settlement (settlement_no,order_id,order_no,seller_id,order_amount,platform_fee,settle_amount,status) VALUES (#{settlementNo},#{orderId},#{orderNo},#{sellerId},#{orderAmount},#{platformFee},#{settleAmount},#{status})</insert>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_settlement (settlement_no,order_id,order_no,seller_id,order_amount,platform_fee,settle_amount,status,escrow_amount) VALUES (#{settlementNo},#{orderId},#{orderNo},#{sellerId},#{orderAmount},#{platformFee},#{settleAmount},#{status},#{escrowAmount})</insert>
     <update id="updateStatus">UPDATE t_settlement SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
     <update id="updateSettledAt">UPDATE t_settlement SET settled_at=#{settledAt}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="freeze">UPDATE t_settlement SET status='FROZEN', frozen_amount=#{frozenAmount}, freeze_reason=#{freezeReason}, frozen_at=NOW(), updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
+    <update id="unfreeze">UPDATE t_settlement SET status=#{toStatus}, frozen_amount=NULL, freeze_reason=NULL, frozen_at=NULL, updated_at=NOW() WHERE id=#{id} AND status='FROZEN'</update>
+    <update id="retryFailed">UPDATE t_settlement SET status='PENDING', retry_count=retry_count+1, updated_at=NOW() WHERE id=#{id} AND status='FAILED'</update>
 </mapper>

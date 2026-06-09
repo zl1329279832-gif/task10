@@ -4,13 +4,16 @@ import com.campus.trade.common.config.TradeConfig;
 import com.campus.trade.common.exception.BizException;
 import com.campus.trade.common.exception.ErrorCode;
 import com.campus.trade.domain.entity.Order;
+import com.campus.trade.domain.entity.Payment;
 import com.campus.trade.domain.entity.Settlement;
 import com.campus.trade.domain.enums.OrderStatus;
+import com.campus.trade.domain.enums.PaymentStatus;
 import com.campus.trade.domain.enums.SettlementStatus;
 import com.campus.trade.dto.response.SettlementResponse;
 import com.campus.trade.common.result.PageResult;
 import com.campus.trade.common.util.BizNoGenerator;
 import com.campus.trade.mapper.OrderMapper;
+import com.campus.trade.mapper.PaymentMapper;
 import com.campus.trade.mapper.SettlementMapper;
 import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +33,7 @@ public class SettlementServiceImpl implements SettlementService {
 
     private final SettlementMapper settlementMapper;
     private final OrderMapper orderMapper;
+    private final PaymentMapper paymentMapper;
     private final OrderService orderService;
     private final AuditService auditService;
     private final TradeConfig tradeConfig;
@@ -44,6 +48,11 @@ public class SettlementServiceImpl implements SettlementService {
         if (settlementMapper.findByOrderId(orderId) != null)
             throw new BizException(ErrorCode.SETTLEMENT_ALREADY_EXISTS);
 
+        // Guard: check payment not frozen
+        Payment payment = paymentMapper.findByOrderId(orderId);
+        if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus()))
+            throw new BizException(ErrorCode.PAYMENT_FROZEN);
+
         BigDecimal fee = o.getTotalAmount()
                 .multiply(tradeConfig.getPlatformFeeRate())
                 .setScale(2, RoundingMode.HALF_UP);
@@ -56,6 +65,7 @@ public class SettlementServiceImpl implements SettlementService {
         s.setOrderAmount(o.getTotalAmount());
         s.setPlatformFee(fee);
         s.setSettleAmount(o.getTotalAmount().subtract(fee));
+        s.setEscrowAmount(payment != null ? payment.getAmount() : o.getTotalAmount());
         s.setStatus(SettlementStatus.PENDING.name());
         settlementMapper.insert(s);
 
@@ -69,10 +79,33 @@ public class SettlementServiceImpl implements SettlementService {
     public void executeSettlement(Long id) {
         Settlement s = settlementMapper.findById(id);
         if (s == null) throw new BizException(404, "Not found");
+
+        // Guard: check settlement not frozen
+        if (SettlementStatus.FROZEN.name().equals(s.getStatus()))
+            throw new BizException(ErrorCode.SETTLEMENT_FROZEN);
+
+        // Guard: check payment not frozen
+        Payment payment = paymentMapper.findByOrderId(s.getOrderId());
+        if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus()))
+            throw new BizException(ErrorCode.PAYMENT_FROZEN);
+
         if (settlementMapper.updateStatus(id, "PENDING", "SETTLED") == 0)
             throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
         settlementMapper.updateSettledAt(id, LocalDateTime.now());
         orderService.transitionOrder(s.getOrderId(), OrderStatus.SETTLED.name(), null, "Settlement completed");
+    }
+
+    @Override
+    @Transactional
+    public SettlementResponse retrySettlement(Long id) {
+        Settlement s = settlementMapper.findById(id);
+        if (s == null) throw new BizException(404, "Not found");
+        if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
+            throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
+        if (settlementMapper.retryFailed(id) == 0)
+            throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
+        executeSettlement(id);
+        return getSettlement(id);
     }
 
     @Override
@@ -103,6 +136,11 @@ public class SettlementServiceImpl implements SettlementService {
         r.setStatus(s.getStatus());
         r.setStatusDesc(SettlementStatus.valueOf(s.getStatus()).getDesc());
         r.setSettledAt(s.getSettledAt());
+        r.setFrozenAmount(s.getFrozenAmount());
+        r.setFreezeReason(s.getFreezeReason());
+        r.setFrozenAt(s.getFrozenAt());
+        r.setEscrowAmount(s.getEscrowAmount());
+        r.setRetryCount(s.getRetryCount());
         r.setCreatedAt(s.getCreatedAt());
         return r;
     }

@@ -14,4 +14,6 @@ import org.springframework.web.bind.annotation.*;
 public class ArbitrationController {
     private final ArbitrationService arbitrationService;
     @PostMapping public Result<Arbitration> arbitrate(@Valid @RequestBody ArbitrationRequest r) { return Result.ok(arbitrationService.arbitrate(SecurityUtil.currentUserId(), r)); }
+    @PostMapping("/reverse") @Operation(summary = "Reverse arbitration ruling") public Result<Arbitration> reverse(@Valid @RequestBody ArbitrationRequest r) { return Result.ok(arbitrationService.reverseArbitration(SecurityUtil.currentUserId(), r)); }
+    @GetMapping("/dispute/{disputeId}") @Operation(summary = "Get arbitration by dispute ID") public Result<Arbitration> getByDispute(@PathVariable Long disputeId) { return Result.ok(arbitrationService.getByDisputeId(disputeId)); }
 }

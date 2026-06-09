@@ -8,4 +8,5 @@ public final class BizNoGenerator {
     public static String disputeNo() { return "DSP"+IdUtil.getSnowflakeNextIdStr(); }
     public static String arbitrationNo() { return "ARB"+IdUtil.getSnowflakeNextIdStr(); }
     public static String settlementNo() { return "STL"+IdUtil.getSnowflakeNextIdStr(); }
+    public static String fundSplitNo() { return "FSP"+IdUtil.getSnowflakeNextIdStr(); }
 }

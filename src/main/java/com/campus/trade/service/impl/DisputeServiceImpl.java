@@ -32,6 +32,7 @@ public class DisputeServiceImpl implements DisputeService {
     private final OrderService orderService;
     private final AuditService auditService;
     private final DistributedLock distributedLock;
+    private final EscrowService escrowService;
 
     @Override
     @Transactional
@@ -68,6 +69,14 @@ public class DisputeServiceImpl implements DisputeService {
         disputeMapper.insert(d);
 
         orderService.transitionOrder(o.getId(), OrderStatus.DISPUTED.name(), userId, "Dispute raised");
+
+        // Freeze escrow funds when dispute is initiated
+        try {
+            escrowService.freezeFunds(o.getId(), userId, "Dispute raised: " + d.getDisputeNo());
+        } catch (Exception e) {
+            log.warn("Failed to freeze funds on dispute create, orderId={}: {}", o.getId(), e.getMessage());
+        }
+
         return toResp(d);
     }
 

@@ -64,6 +64,8 @@ CREATE TABLE `t_payment` (
     `pay_channel` VARCHAR(32) NOT NULL DEFAULT 'ALIPAY', `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING',
     `callback_content` TEXT DEFAULT NULL, `notify_count` INT NOT NULL DEFAULT 0,
     `paid_at` DATETIME DEFAULT NULL,
+    `frozen_amount` DECIMAL(10,2) DEFAULT NULL, `freeze_reason` VARCHAR(256) DEFAULT NULL,
+    `frozen_at` DATETIME DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`), UNIQUE KEY `uk_payment_no` (`payment_no`),
     KEY `idx_order` (`order_id`), KEY `idx_order_no` (`order_no`), KEY `idx_trade_no` (`trade_no`)
@@ -101,16 +103,35 @@ CREATE TABLE `t_arbitration` (
     `id` BIGINT NOT NULL AUTO_INCREMENT, `arbitration_no` VARCHAR(64) NOT NULL, `dispute_id` BIGINT NOT NULL,
     `order_id` BIGINT NOT NULL, `arbiter_id` BIGINT NOT NULL, `result` VARCHAR(32) NOT NULL,
     `decision` TEXT NOT NULL, `refund_amount` DECIMAL(10,2) DEFAULT NULL,
+    `seller_amount` DECIMAL(10,2) DEFAULT NULL,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`), UNIQUE KEY `uk_arbitration_no` (`arbitration_no`),
     KEY `idx_dispute` (`dispute_id`), KEY `idx_order` (`order_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='arbitration record';
+
+CREATE TABLE `t_fund_split` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT, `split_no` VARCHAR(64) NOT NULL,
+    `arbitration_id` BIGINT NOT NULL, `payment_id` BIGINT NOT NULL, `order_id` BIGINT NOT NULL,
+    `total_amount` DECIMAL(10,2) NOT NULL,
+    `buyer_refund_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `seller_settle_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `platform_fee` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    `buyer_refund_no` VARCHAR(64) DEFAULT NULL, `seller_settlement_no` VARCHAR(64) DEFAULT NULL,
+    `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`), UNIQUE KEY `uk_split_no` (`split_no`),
+    KEY `idx_arbitration` (`arbitration_id`), KEY `idx_payment` (`payment_id`), KEY `idx_order` (`order_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='fund split record for arbitration rulings';
 
 CREATE TABLE `t_settlement` (
     `id` BIGINT NOT NULL AUTO_INCREMENT, `settlement_no` VARCHAR(64) NOT NULL, `order_id` BIGINT NOT NULL,
     `order_no` VARCHAR(32) NOT NULL, `seller_id` BIGINT NOT NULL, `order_amount` DECIMAL(10,2) NOT NULL,
     `platform_fee` DECIMAL(10,2) NOT NULL DEFAULT 0.00, `settle_amount` DECIMAL(10,2) NOT NULL,
     `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING', `settled_at` DATETIME DEFAULT NULL,
+    `frozen_amount` DECIMAL(10,2) DEFAULT NULL, `freeze_reason` VARCHAR(256) DEFAULT NULL,
+    `frozen_at` DATETIME DEFAULT NULL, `escrow_amount` DECIMAL(10,2) DEFAULT NULL,
+    `retry_count` INT NOT NULL DEFAULT 0,
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`), UNIQUE KEY `uk_settlement_no` (`settlement_no`),
     KEY `idx_order` (`order_id`), KEY `idx_seller` (`seller_id`,`status`)

@@ -32,6 +32,7 @@ public class RefundServiceImpl implements RefundService {
     private final OrderService orderService;
     private final AuditService auditService;
     private final DistributedLock distributedLock;
+    private final EscrowService escrowService;
 
     @Override
     @Transactional
@@ -67,6 +68,14 @@ public class RefundServiceImpl implements RefundService {
 
         orderService.transitionOrder(o.getId(), OrderStatus.REFUNDING.name(), buyerId, "Refund applied");
         auditService.log(buyerId, null, "REFUND", "APPLY", "ORDER", o.getId(), "refundNo=" + r.getRefundNo());
+
+        // Freeze escrow funds when refund is initiated
+        try {
+            escrowService.freezeFunds(o.getId(), buyerId, "Refund applied: " + r.getRefundNo());
+        } catch (Exception e) {
+            log.warn("Failed to freeze funds on refund apply, orderId={}: {}", o.getId(), e.getMessage());
+        }
+
         return toResp(r);
     }
 

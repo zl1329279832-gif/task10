@@ -13,6 +13,7 @@ public class SettlementController {
     private final SettlementService settlementService;
     @PostMapping("/order/{orderId}") public Result<SettlementResponse> create(@PathVariable Long orderId) { return Result.ok(settlementService.createSettlement(orderId)); }
     @PostMapping("/{id}/execute") public Result<Void> execute(@PathVariable Long id) { settlementService.executeSettlement(id); return Result.ok(); }
+    @PostMapping("/{id}/retry") @Operation(summary = "Retry a failed settlement") public Result<SettlementResponse> retry(@PathVariable Long id) { return Result.ok(settlementService.retrySettlement(id)); }
     @GetMapping("/{id}") public Result<SettlementResponse> get(@PathVariable Long id) { return Result.ok(settlementService.getSettlement(id)); }
     @GetMapping("/seller") public Result<PageResult<SettlementResponse>> my(@RequestParam(required=false) String status, @RequestParam(defaultValue="1") int page, @RequestParam(defaultValue="20") int size) { return Result.ok(settlementService.listSettlements(SecurityUtil.currentUserId(), status, page, size)); }
 }

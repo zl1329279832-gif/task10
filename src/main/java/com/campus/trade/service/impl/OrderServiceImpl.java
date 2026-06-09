@@ -16,6 +16,8 @@ import com.campus.trade.mapper.*;
 import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +40,7 @@ public class OrderServiceImpl implements OrderService {
     private final AuditService auditService;
     private final DistributedLock distributedLock;
     private final TradeConfig tradeConfig;
+    @Autowired @Lazy private EscrowService escrowService;
 
     @Override
     @Transactional
@@ -157,6 +160,13 @@ public class OrderServiceImpl implements OrderService {
             logTransition(orderId, "SHIPPED", "RECEIVED", buyerId, "Confirmed receipt");
         } finally {
             distributedLock.unlock(lk);
+        }
+
+        // Auto-settle from escrow on receipt confirmation (non-fatal)
+        try {
+            escrowService.autoSettleOnReceipt(orderId, buyerId);
+        } catch (Exception e) {
+            log.warn("Auto-settle failed on receipt for orderId={}: {}", orderId, e.getMessage());
         }
     }
 

@@ -4,10 +4,14 @@
     <resultMap id="BaseResult" type="com.campus.trade.domain.entity.Arbitration">
         <id column="id" property="id"/><result column="arbitration_no" property="arbitrationNo"/><result column="dispute_id" property="disputeId"/>
         <result column="order_id" property="orderId"/><result column="arbiter_id" property="arbiterId"/><result column="result" property="result"/>
-        <result column="decision" property="decision"/><result column="refund_amount" property="refundAmount"/><result column="created_at" property="createdAt"/>
+        <result column="decision" property="decision"/><result column="refund_amount" property="refundAmount"/>
+        <result column="seller_amount" property="sellerAmount"/>
+        <result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
     </resultMap>
     <select id="findById" resultMap="BaseResult">SELECT * FROM t_arbitration WHERE id=#{id}</select>
     <select id="findByDisputeId" resultMap="BaseResult">SELECT * FROM t_arbitration WHERE dispute_id=#{disputeId} LIMIT 1</select>
     <select id="findByArbitrationNo" resultMap="BaseResult">SELECT * FROM t_arbitration WHERE arbitration_no=#{arbitrationNo}</select>
-    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_arbitration (arbitration_no,dispute_id,order_id,arbiter_id,result,decision,refund_amount) VALUES (#{arbitrationNo},#{disputeId},#{orderId},#{arbiterId},#{result},#{decision},#{refundAmount})</insert>
+    <select id="findByOrderId" resultMap="BaseResult">SELECT * FROM t_arbitration WHERE order_id=#{orderId} ORDER BY created_at DESC</select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_arbitration (arbitration_no,dispute_id,order_id,arbiter_id,result,decision,refund_amount,seller_amount) VALUES (#{arbitrationNo},#{disputeId},#{orderId},#{arbiterId},#{result},#{decision},#{refundAmount},#{sellerAmount})</insert>
+    <update id="updateRuling">UPDATE t_arbitration SET result=#{result}, decision=#{decision}, refund_amount=#{refundAmount}, seller_amount=#{sellerAmount}, updated_at=NOW() WHERE id=#{id}</update>
 </mapper>

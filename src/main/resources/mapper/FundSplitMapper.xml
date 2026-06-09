@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.campus.trade.mapper.FundSplitMapper">
+    <resultMap id="BaseResult" type="com.campus.trade.domain.entity.FundSplit">
+        <id column="id" property="id"/><result column="split_no" property="splitNo"/>
+        <result column="arbitration_id" property="arbitrationId"/><result column="payment_id" property="paymentId"/>
+        <result column="order_id" property="orderId"/><result column="total_amount" property="totalAmount"/>
+        <result column="buyer_refund_amount" property="buyerRefundAmount"/>
+        <result column="seller_settle_amount" property="sellerSettleAmount"/>
+        <result column="platform_fee" property="platformFee"/>
+        <result column="buyer_refund_no" property="buyerRefundNo"/>
+        <result column="seller_settlement_no" property="sellerSettlementNo"/>
+        <result column="status" property="status"/>
+        <result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+    </resultMap>
+    <select id="findById" resultMap="BaseResult">SELECT * FROM t_fund_split WHERE id=#{id}</select>
+    <select id="findBySplitNo" resultMap="BaseResult">SELECT * FROM t_fund_split WHERE split_no=#{splitNo}</select>
+    <select id="findByArbitrationId" resultMap="BaseResult">SELECT * FROM t_fund_split WHERE arbitration_id=#{arbitrationId} ORDER BY created_at DESC</select>
+    <select id="findActiveByArbitrationId" resultMap="BaseResult">SELECT * FROM t_fund_split WHERE arbitration_id=#{arbitrationId} AND status != 'CANCELLED' ORDER BY created_at DESC LIMIT 1</select>
+    <select id="findByOrderId" resultMap="BaseResult">SELECT * FROM t_fund_split WHERE order_id=#{orderId} ORDER BY created_at DESC</select>
+    <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_fund_split (split_no,arbitration_id,payment_id,order_id,total_amount,buyer_refund_amount,seller_settle_amount,platform_fee,status) VALUES (#{splitNo},#{arbitrationId},#{paymentId},#{orderId},#{totalAmount},#{buyerRefundAmount},#{sellerSettleAmount},#{platformFee},#{status})</insert>
+    <update id="updateStatus">UPDATE t_fund_split SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
+    <update id="updateBuyerRefundNo">UPDATE t_fund_split SET buyer_refund_no=#{buyerRefundNo}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateSellerSettlementNo">UPDATE t_fund_split SET seller_settlement_no=#{sellerSettlementNo}, updated_at=NOW() WHERE id=#{id}</update>
+</mapper>
