@@ -7,7 +7,7 @@ public enum OrderStateTransition {
     SHIPPED(OrderStatus.RECEIVED, OrderStatus.REFUNDING, OrderStatus.DISPUTED),
     RECEIVED(OrderStatus.SETTLED, OrderStatus.REFUNDING, OrderStatus.DISPUTED),
     REFUNDING(OrderStatus.REFUNDED, OrderStatus.DISPUTED, OrderStatus.PAID),
-    DISPUTED(OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.RECEIVED, OrderStatus.REFUNDED, OrderStatus.CANCELLED),
+    DISPUTED(OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.RECEIVED, OrderStatus.REFUNDED, OrderStatus.CANCELLED, OrderStatus.SETTLED),
     REFUNDED(), SETTLED(), CANCELLED(), CLOSED();
     private final Set<OrderStatus> validTargets;
     OrderStateTransition(OrderStatus... targets) {

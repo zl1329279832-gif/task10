@@ -7,5 +7,7 @@ public class Payment {
     private Long id; private String paymentNo; private Long orderId; private String orderNo;
     private String tradeNo; private BigDecimal amount; private String payChannel; private String status;
     private String callbackContent; private Integer notifyCount; private LocalDateTime paidAt;
+    private LocalDateTime escrowAt; private LocalDateTime frozenAt;
+    private LocalDateTime unfrozenAt; private String freezeReason;
     private LocalDateTime createdAt; private LocalDateTime updatedAt;
 }

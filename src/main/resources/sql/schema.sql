@@ -64,6 +64,10 @@ CREATE TABLE `t_payment` (
     `pay_channel` VARCHAR(32) NOT NULL DEFAULT 'ALIPAY', `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING',
     `callback_content` TEXT DEFAULT NULL, `notify_count` INT NOT NULL DEFAULT 0,
     `paid_at` DATETIME DEFAULT NULL,
+    `escrow_at` DATETIME DEFAULT NULL COMMENT 'escrow start time',
+    `frozen_at` DATETIME DEFAULT NULL COMMENT 'freeze time',
+    `unfrozen_at` DATETIME DEFAULT NULL COMMENT 'unfreeze time',
+    `freeze_reason` VARCHAR(512) DEFAULT NULL COMMENT 'freeze reason',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`), UNIQUE KEY `uk_payment_no` (`payment_no`),
     KEY `idx_order` (`order_id`), KEY `idx_order_no` (`order_no`), KEY `idx_trade_no` (`trade_no`)
@@ -101,7 +105,10 @@ CREATE TABLE `t_arbitration` (
     `id` BIGINT NOT NULL AUTO_INCREMENT, `arbitration_no` VARCHAR(64) NOT NULL, `dispute_id` BIGINT NOT NULL,
     `order_id` BIGINT NOT NULL, `arbiter_id` BIGINT NOT NULL, `result` VARCHAR(32) NOT NULL,
     `decision` TEXT NOT NULL, `refund_amount` DECIMAL(10,2) DEFAULT NULL,
+    `superseded_by` BIGINT DEFAULT NULL COMMENT 'overruled by arbitration id',
+    `is_active` TINYINT NOT NULL DEFAULT 1 COMMENT '1=active ruling, 0=superseded',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`), UNIQUE KEY `uk_arbitration_no` (`arbitration_no`),
     KEY `idx_dispute` (`dispute_id`), KEY `idx_order` (`order_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='arbitration record';
@@ -111,6 +118,14 @@ CREATE TABLE `t_settlement` (
     `order_no` VARCHAR(32) NOT NULL, `seller_id` BIGINT NOT NULL, `order_amount` DECIMAL(10,2) NOT NULL,
     `platform_fee` DECIMAL(10,2) NOT NULL DEFAULT 0.00, `settle_amount` DECIMAL(10,2) NOT NULL,
     `status` VARCHAR(32) NOT NULL DEFAULT 'PENDING', `settled_at` DATETIME DEFAULT NULL,
+    `frozen_at` DATETIME DEFAULT NULL COMMENT 'freeze time',
+    `unfrozen_at` DATETIME DEFAULT NULL COMMENT 'unfreeze time',
+    `freeze_reason` VARCHAR(512) DEFAULT NULL COMMENT 'freeze reason',
+    `buyer_refund_amount` DECIMAL(10,2) DEFAULT NULL COMMENT 'buyer refund amount in split settlement',
+    `retry_count` INT NOT NULL DEFAULT 0 COMMENT 'settlement retry count',
+    `max_retry` INT NOT NULL DEFAULT 5 COMMENT 'max retry attempts',
+    `next_retry_at` DATETIME DEFAULT NULL COMMENT 'next retry time',
+    `fail_reason` VARCHAR(512) DEFAULT NULL COMMENT 'failure reason',
     `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (`id`), UNIQUE KEY `uk_settlement_no` (`settlement_no`),
     KEY `idx_order` (`order_id`), KEY `idx_seller` (`seller_id`,`status`)

@@ -5,7 +5,12 @@
         <id column="id" property="id"/><result column="settlement_no" property="settlementNo"/><result column="order_id" property="orderId"/>
         <result column="order_no" property="orderNo"/><result column="seller_id" property="sellerId"/><result column="order_amount" property="orderAmount"/>
         <result column="platform_fee" property="platformFee"/><result column="settle_amount" property="settleAmount"/><result column="status" property="status"/>
-        <result column="settled_at" property="settledAt"/><result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
+        <result column="settled_at" property="settledAt"/>
+        <result column="frozen_at" property="frozenAt"/><result column="unfrozen_at" property="unfrozenAt"/>
+        <result column="freeze_reason" property="freezeReason"/><result column="buyer_refund_amount" property="buyerRefundAmount"/>
+        <result column="retry_count" property="retryCount"/><result column="max_retry" property="maxRetry"/>
+        <result column="next_retry_at" property="nextRetryAt"/><result column="fail_reason" property="failReason"/>
+        <result column="created_at" property="createdAt"/><result column="updated_at" property="updatedAt"/>
     </resultMap>
     <select id="findById" resultMap="BaseResult">SELECT * FROM t_settlement WHERE id=#{id}</select>
     <select id="findBySettlementNo" resultMap="BaseResult">SELECT * FROM t_settlement WHERE settlement_no=#{settlementNo}</select>
@@ -15,4 +20,9 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_settlement (settlement_no,order_id,order_no,seller_id,order_amount,platform_fee,settle_amount,status) VALUES (#{settlementNo},#{orderId},#{orderNo},#{sellerId},#{orderAmount},#{platformFee},#{settleAmount},#{status})</insert>
     <update id="updateStatus">UPDATE t_settlement SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
     <update id="updateSettledAt">UPDATE t_settlement SET settled_at=#{settledAt}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateFreezeInfo">UPDATE t_settlement SET frozen_at=#{frozenAt}, freeze_reason=#{freezeReason}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateUnfreezeInfo">UPDATE t_settlement SET unfrozen_at=#{unfrozenAt}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateRetryInfo">UPDATE t_settlement SET retry_count=#{retryCount}, next_retry_at=#{nextRetryAt}, fail_reason=#{failReason}, updated_at=NOW() WHERE id=#{id}</update>
+    <update id="updateSettleAmounts">UPDATE t_settlement SET settle_amount=#{settleAmount}, buyer_refund_amount=#{buyerRefundAmount}, platform_fee=#{platformFee}, updated_at=NOW() WHERE id=#{id}</update>
+    <select id="findFailedForRetry" resultMap="BaseResult">SELECT * FROM t_settlement WHERE status='FAILED' AND retry_count &lt; max_retry AND next_retry_at &lt;= #{now} ORDER BY next_retry_at ASC LIMIT #{limit}</select>
 </mapper>

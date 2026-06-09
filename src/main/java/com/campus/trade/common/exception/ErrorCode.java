@@ -16,12 +16,21 @@ public enum ErrorCode {
     PAYMENT_NOT_FOUND(4001,"Payment not found"), PAYMENT_ALREADY_SUCCESS(4002,"Payment already successful"),
     PAYMENT_VERIFY_FAILED(4003,"Payment signature verification failed"),
     PAYMENT_AMOUNT_MISMATCH(4004,"Payment amount mismatch"), PAYMENT_CALLBACK_DUPLICATE(4005,"Duplicate payment callback"),
+    PAYMENT_NOT_ESCROW(4006,"Payment not in escrow state"),
+    PAYMENT_NOT_FROZEN(4007,"Payment not frozen"),
+    PAYMENT_ALREADY_FROZEN(4008,"Payment already frozen"),
     REFUND_NOT_FOUND(5001,"Refund not found"), REFUND_ALREADY_EXISTS(5002,"Refund already applied"),
     REFUND_NOT_ALLOWED(5003,"Refund not allowed in current status"), REFUND_AMOUNT_EXCEED(5004,"Refund amount exceeds order total"),
+    REFUND_AMOUNT_INVALID(5005,"Refund amount must be positive and not exceed order total"),
     DISPUTE_NOT_FOUND(6001,"Dispute not found"), DISPUTE_NOT_PARTICIPANT(6002,"Not a dispute participant"),
     DISPUTE_ALREADY_EXISTS(6003,"Dispute already exists"), DISPUTE_NOT_IN_EVIDENCE(6004,"Dispute not in evidence phase"),
     ARBITRATION_ALREADY_DONE(7001,"Arbitration already completed"),
+    ARBITRATION_OVERRULE_REQUIRED(7002,"Active arbitration exists, set overrule=true to override"),
     SETTLEMENT_ALREADY_EXISTS(8001,"Settlement already exists for this order"),
+    SETTLEMENT_NOT_FOUND(8002,"Settlement not found"),
+    SETTLEMENT_ALREADY_FROZEN(8003,"Settlement already frozen"),
+    SETTLEMENT_NOT_FROZEN(8004,"Settlement not frozen"),
+    SETTLEMENT_RETRY_EXCEEDED(8005,"Settlement retry limit exceeded"),
     IDEMPOTENT_DUPLICATE(9001,"Duplicate request"), IDEMPOTENT_PROCESSING(9002,"Request is being processed");
     private final int code; private final String message;
     ErrorCode(int code, String message) { this.code = code; this.message = message; }

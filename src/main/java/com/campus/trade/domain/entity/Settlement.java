@@ -7,5 +7,8 @@ public class Settlement {
     private Long id; private String settlementNo; private Long orderId; private String orderNo;
     private Long sellerId; private BigDecimal orderAmount; private BigDecimal platformFee;
     private BigDecimal settleAmount; private String status; private LocalDateTime settledAt;
+    private LocalDateTime frozenAt; private LocalDateTime unfrozenAt; private String freezeReason;
+    private BigDecimal buyerRefundAmount; private Integer retryCount; private Integer maxRetry;
+    private LocalDateTime nextRetryAt; private String failReason;
     private LocalDateTime createdAt; private LocalDateTime updatedAt;
 }

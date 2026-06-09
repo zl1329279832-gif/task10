@@ -8,6 +8,7 @@ import com.campus.trade.domain.enums.OrderStatus;
 import com.campus.trade.dto.request.CreateOrderRequest;
 import com.campus.trade.dto.request.ShipRequest;
 import com.campus.trade.dto.response.OrderResponse;
+import com.campus.trade.dto.response.SettlementResponse;
 import com.campus.trade.common.result.PageResult;
 import com.campus.trade.common.util.BizNoGenerator;
 import com.campus.trade.common.util.DistributedLock;
@@ -15,7 +16,10 @@ import com.campus.trade.common.config.TradeConfig;
 import com.campus.trade.mapper.*;
 import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +42,9 @@ public class OrderServiceImpl implements OrderService {
     private final AuditService auditService;
     private final DistributedLock distributedLock;
     private final TradeConfig tradeConfig;
+
+    @Setter(onMethod_ = {@Autowired, @Lazy})
+    private SettlementService settlementService;
 
     @Override
     @Transactional
@@ -157,6 +164,16 @@ public class OrderServiceImpl implements OrderService {
             logTransition(orderId, "SHIPPED", "RECEIVED", buyerId, "Confirmed receipt");
         } finally {
             distributedLock.unlock(lk);
+        }
+
+        // Auto-create and execute settlement (escrow release)
+        try {
+            SettlementResponse sr = settlementService.createSettlement(orderId);
+            settlementService.executeSettlement(sr.getId());
+        } catch (BizException e) {
+            log.warn("Auto-settlement failed for order {}: {}", orderId, e.getMessage());
+            auditService.log(buyerId, null, "SETTLEMENT", "AUTO_SETTLE_FAILED",
+                    "ORDER", orderId, "error=" + e.getMessage());
         }
     }
 

@@ -29,7 +29,9 @@ public class RefundServiceImpl implements RefundService {
 
     private final RefundMapper refundMapper;
     private final OrderMapper orderMapper;
+    private final com.campus.trade.mapper.PaymentMapper paymentMapper;
     private final OrderService orderService;
+    private final SettlementService settlementService;
     private final AuditService auditService;
     private final DistributedLock distributedLock;
 
@@ -66,6 +68,10 @@ public class RefundServiceImpl implements RefundService {
         refundMapper.insert(r);
 
         orderService.transitionOrder(o.getId(), OrderStatus.REFUNDING.name(), buyerId, "Refund applied");
+
+        // Freeze escrowed funds
+        settlementService.freezeSettlement(o.getId(), "Refund applied: " + r.getRefundNo());
+
         auditService.log(buyerId, null, "REFUND", "APPLY", "ORDER", o.getId(), "refundNo=" + r.getRefundNo());
         return toResp(r);
     }
@@ -84,6 +90,13 @@ public class RefundServiceImpl implements RefundService {
                 throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
             refundMapper.updateApproval(refundId, sellerId, LocalDateTime.now(), null);
             orderService.transitionOrder(r.getOrderId(), OrderStatus.REFUNDED.name(), sellerId, "Refund approved");
+
+            // Close payment (funds released from escrow to buyer)
+            com.campus.trade.domain.entity.Payment p = paymentMapper.findByOrderId(r.getOrderId());
+            if (p != null && com.campus.trade.domain.enums.PaymentStatus.FROZEN.name().equals(p.getStatus())) {
+                paymentMapper.updateStatus(p.getId(), "FROZEN", "CLOSED");
+                paymentMapper.updateUnfreezeInfo(p.getId(), LocalDateTime.now());
+            }
         } finally {
             distributedLock.unlock(lk);
         }
@@ -104,6 +117,9 @@ public class RefundServiceImpl implements RefundService {
                 throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
             refundMapper.updateApproval(refundId, sellerId, LocalDateTime.now(), reason);
             orderService.transitionOrder(r.getOrderId(), OrderStatus.PAID.name(), sellerId, "Refund rejected: " + reason);
+
+            // Unfreeze escrowed funds
+            settlementService.unfreezeSettlement(r.getOrderId());
         } finally {
             distributedLock.unlock(lk);
         }

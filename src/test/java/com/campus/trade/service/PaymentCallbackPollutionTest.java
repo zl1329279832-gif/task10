@@ -88,7 +88,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD001", "T001");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(paymentMapper, never()).updateTradeNo(anyLong(), anyString(), any());
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
             verify(inventoryService, never()).deductStock(anyLong(), anyInt());
@@ -123,7 +123,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD002", "T002");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
             verify(inventoryService, never()).deductStock(anyLong(), anyInt());
         }
@@ -143,7 +143,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD003", "T003");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
         }
     }
@@ -162,7 +162,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD004", "T004");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
             verify(auditService).log(isNull(), isNull(), eq("PAYMENT"),
                     eq("CALLBACK_REJECTED_ORDER_NOT_CREATED"), eq("ORDER"), eq(400L),
@@ -187,7 +187,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD005", "T005");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(paymentMapper, never()).updateTradeNo(anyLong(), anyString(), any());
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
             verify(inventoryService, never()).deductStock(anyLong(), anyInt());
@@ -225,7 +225,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD006", "TRADE_DUP");
 
-            verify(paymentMapper, never()).updateStatus(2L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(2L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
         }
 
@@ -293,18 +293,18 @@ class PaymentCallbackPollutionTest {
             when(paymentMapper.findById(1L)).thenReturn(p);
             when(orderMapper.findById(800L)).thenReturn(o);
             when(paymentMapper.findByTradeNo("T_OK")).thenReturn(null);
-            when(paymentMapper.updateStatus(1L, "PENDING", "SUCCESS")).thenReturn(1);
+            when(paymentMapper.updateStatus(1L, "PENDING", "ESCROW")).thenReturn(1);
             when(paymentMapper.updateTradeNo(eq(1L), eq("T_OK"), any())).thenReturn(1);
             when(orderMapper.updatePayInfo(eq(800L), any())).thenReturn(1);
 
             paymentService.simulatePayNotify("ORD008", "T_OK");
 
-            verify(paymentMapper).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper).updateStatus(1L, "PENDING", "ESCROW");
             verify(paymentMapper).updateTradeNo(eq(1L), eq("T_OK"), any());
             verify(orderService).transitionToPaidInternal(800L, "Payment callback received");
             verify(orderMapper).updatePayInfo(eq(800L), any());
             verify(inventoryService).deductStock(10L, 1);
-            verify(auditService).log(isNull(), isNull(), eq("PAYMENT"), eq("SUCCESS"),
+            verify(auditService).log(isNull(), isNull(), eq("PAYMENT"), eq("ESCROW"),
                     eq("ORDER"), eq(800L), contains("tradeNo=T_OK"));
         }
     }
@@ -321,7 +321,7 @@ class PaymentCallbackPollutionTest {
             when(paymentMapper.findById(1L)).thenReturn(p);
             when(orderMapper.findById(900L)).thenReturn(o);
             when(paymentMapper.findByTradeNo("T_CAS")).thenReturn(null);
-            when(paymentMapper.updateStatus(1L, "PENDING", "SUCCESS")).thenReturn(0);
+            when(paymentMapper.updateStatus(1L, "PENDING", "ESCROW")).thenReturn(0);
 
             paymentService.simulatePayNotify("ORD009", "T_CAS");
 
@@ -345,7 +345,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD010", "T010");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(auditService).log(isNull(), isNull(), eq("PAYMENT"),
                     eq("CALLBACK_REJECTED_ORDER_NOT_CREATED"), eq("ORDER"), eq(1000L),
                     contains("orderStatus=NULL"));
@@ -385,7 +385,7 @@ class PaymentCallbackPollutionTest {
             when(paymentMapper.findById(1L)).thenReturn(p);
             when(orderMapper.findById(1200L)).thenReturn(o);
             when(paymentMapper.findByTradeNo("T012")).thenReturn(null);
-            when(paymentMapper.updateStatus(1L, "PENDING", "SUCCESS")).thenReturn(1);
+            when(paymentMapper.updateStatus(1L, "PENDING", "ESCROW")).thenReturn(1);
             when(paymentMapper.updateTradeNo(eq(1L), eq("T012"), any())).thenReturn(1);
             doThrow(new BizException(ErrorCode.ORDER_STATUS_INVALID, "CANCELLED -> PAID"))
                     .when(orderService).transitionToPaidInternal(1200L, "Payment callback received");
@@ -393,10 +393,10 @@ class PaymentCallbackPollutionTest {
             String result = paymentService.simulatePayNotify("ORD012", "T012");
             assertThat(result).isEqualTo("success");
 
-            verify(paymentMapper).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper).updateStatus(1L, "PENDING", "ESCROW");
             verify(auditService).log(isNull(), isNull(), eq("PAYMENT"),
                     eq("ORDER_TRANSITION_FAILED"), eq("ORDER"), eq(1200L),
-                    contains("paymentStatus=SUCCESS"));
+                    contains("paymentStatus=ESCROW"));
             verify(inventoryService, never()).deductStock(anyLong(), anyInt());
         }
     }
@@ -415,7 +415,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD013", "T013");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
             verify(inventoryService, never()).deductStock(anyLong(), anyInt());
         }
@@ -435,7 +435,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD014", "T014");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(auditService).log(isNull(), isNull(), eq("PAYMENT"),
                     eq("CALLBACK_REJECTED_ORDER_NOT_CREATED"), eq("ORDER"), eq(1400L),
                     contains("orderStatus=DISPUTED"));
@@ -456,7 +456,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD015", "T015");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
         }
     }
@@ -475,7 +475,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD016", "T016");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
         }
     }
@@ -494,7 +494,7 @@ class PaymentCallbackPollutionTest {
 
             paymentService.simulatePayNotify("ORD017", "T017");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "ESCROW");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
         }
     }

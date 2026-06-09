@@ -30,6 +30,7 @@ public class DisputeServiceImpl implements DisputeService {
     private final ArbitrationMapper arbitrationMapper;
     private final OrderMapper orderMapper;
     private final OrderService orderService;
+    private final SettlementService settlementService;
     private final AuditService auditService;
     private final DistributedLock distributedLock;
 
@@ -68,6 +69,10 @@ public class DisputeServiceImpl implements DisputeService {
         disputeMapper.insert(d);
 
         orderService.transitionOrder(o.getId(), OrderStatus.DISPUTED.name(), userId, "Dispute raised");
+
+        // Freeze escrowed funds during dispute
+        settlementService.freezeSettlement(o.getId(), "Dispute raised: " + d.getDisputeNo());
+
         return toResp(d);
     }
 

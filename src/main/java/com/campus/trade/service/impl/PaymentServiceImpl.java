@@ -50,7 +50,8 @@ public class PaymentServiceImpl implements PaymentService {
             throw new BizException(ErrorCode.ORDER_EXPIRED);
 
         Payment existing = paymentMapper.findByOrderNo(orderNo);
-        if (existing != null && PaymentStatus.SUCCESS.name().equals(existing.getStatus()))
+        if (existing != null && (PaymentStatus.SUCCESS.name().equals(existing.getStatus())
+                || PaymentStatus.ESCROW.name().equals(existing.getStatus())))
             throw new BizException(ErrorCode.ORDER_ALREADY_PAID);
 
         Payment payment;
@@ -106,8 +107,9 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         // Fast-path: already processed — just acknowledge
-        if (PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
-            log.info("Dup callback for SUCCESS payment: {}", outTradeNo);
+        if (PaymentStatus.SUCCESS.name().equals(payment.getStatus())
+                || PaymentStatus.ESCROW.name().equals(payment.getStatus())) {
+            log.info("Dup callback for {}: {}", payment.getStatus(), outTradeNo);
             return "success";
         }
         if (PaymentStatus.CLOSED.name().equals(payment.getStatus())) {
@@ -156,8 +158,9 @@ public class PaymentServiceImpl implements PaymentService {
             }
 
             // Already processed (duplicate / concurrent callback won the race)
-            if (PaymentStatus.SUCCESS.name().equals(fresh.getStatus())) {
-                log.info("Duplicate callback (already SUCCESS): {}", payment.getPaymentNo());
+            if (PaymentStatus.SUCCESS.name().equals(fresh.getStatus())
+                    || PaymentStatus.ESCROW.name().equals(fresh.getStatus())) {
+                log.info("Duplicate callback (already {}): {}", fresh.getStatus(), payment.getPaymentNo());
                 return "success";
             }
             if (!PaymentStatus.PENDING.name().equals(fresh.getStatus())) {
@@ -201,15 +204,16 @@ public class PaymentServiceImpl implements PaymentService {
 
             // ── All guards passed — safe to transition ──
 
-            // 4. Optimistic-lock payment PENDING → SUCCESS
-            if (paymentMapper.updateStatus(payment.getId(), "PENDING", "SUCCESS") == 0) {
+            // 4. Optimistic-lock payment PENDING → ESCROW (funds held in escrow)
+            if (paymentMapper.updateStatus(payment.getId(), "PENDING", "ESCROW") == 0) {
                 log.info("Payment CAS failed (already processed): {}", payment.getPaymentNo());
                 return "success";
             }
 
-            // 5. Record trade_no and paidAt
+            // 5. Record trade_no, paidAt, and escrowAt
             LocalDateTime now = LocalDateTime.now();
             paymentMapper.updateTradeNo(payment.getId(), tradeNo, now);
+            paymentMapper.updateEscrowInfo(payment.getId(), now);
 
             // 6. Transition order CREATED → PAID (lock-free, caller holds the lock)
             try {
@@ -221,7 +225,7 @@ public class PaymentServiceImpl implements PaymentService {
                         order.getId(), e.getMessage());
                 auditService.log(null, null, "PAYMENT", "ORDER_TRANSITION_FAILED",
                         "ORDER", order.getId(),
-                        "paymentStatus=SUCCESS,orderTransitionError=" + e.getMessage());
+                        "paymentStatus=ESCROW,orderTransitionError=" + e.getMessage());
                 return "success";
             }
 
@@ -232,9 +236,9 @@ public class PaymentServiceImpl implements PaymentService {
             inventoryService.deductStock(order.getSkuId(), order.getQuantity());
 
             // 9. Audit trail
-            auditService.log(null, null, "PAYMENT", "SUCCESS", "ORDER", order.getId(),
-                    "tradeNo=" + tradeNo);
-            log.info("Payment success: orderNo={}, tradeNo={}", order.getOrderNo(), tradeNo);
+            auditService.log(null, null, "PAYMENT", "ESCROW", "ORDER", order.getId(),
+                    "tradeNo=" + tradeNo + ",funds held in escrow");
+            log.info("Payment escrow: orderNo={}, tradeNo={}", order.getOrderNo(), tradeNo);
             return "success";
 
         } catch (BizException e) {
