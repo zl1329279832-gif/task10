@@ -12,6 +12,7 @@ import com.campus.trade.domain.enums.SettlementStatus;
 import com.campus.trade.dto.response.SettlementResponse;
 import com.campus.trade.common.result.PageResult;
 import com.campus.trade.common.util.BizNoGenerator;
+import com.campus.trade.common.util.DistributedLock;
 import com.campus.trade.mapper.OrderMapper;
 import com.campus.trade.mapper.PaymentMapper;
 import com.campus.trade.mapper.SettlementMapper;
@@ -37,46 +38,63 @@ public class SettlementServiceImpl implements SettlementService {
     private final OrderService orderService;
     private final AuditService auditService;
     private final TradeConfig tradeConfig;
+    private final DistributedLock distributedLock;
 
     @Override
     @Transactional
     public SettlementResponse createSettlement(Long orderId) {
-        Order o = orderMapper.findById(orderId);
-        if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
-        if (!OrderStatus.RECEIVED.name().equals(o.getStatus()))
-            throw new BizException(ErrorCode.ORDER_STATUS_INVALID, "Must be RECEIVED");
-        if (settlementMapper.findByOrderId(orderId) != null)
-            throw new BizException(ErrorCode.SETTLEMENT_ALREADY_EXISTS);
+        String lk = "order:" + orderId;
+        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            Order o = orderMapper.findById(orderId);
+            if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
+            if (!OrderStatus.RECEIVED.name().equals(o.getStatus()))
+                throw new BizException(ErrorCode.ORDER_STATUS_INVALID, "Must be RECEIVED");
+            if (settlementMapper.findByOrderId(orderId) != null)
+                throw new BizException(ErrorCode.SETTLEMENT_ALREADY_EXISTS);
 
-        // Guard: check payment not frozen
-        Payment payment = paymentMapper.findByOrderId(orderId);
-        if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus()))
-            throw new BizException(ErrorCode.PAYMENT_FROZEN);
+            // Guard: check payment not frozen
+            Payment payment = paymentMapper.findByOrderId(orderId);
+            if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus()))
+                throw new BizException(ErrorCode.PAYMENT_FROZEN);
 
-        BigDecimal fee = o.getTotalAmount()
-                .multiply(tradeConfig.getPlatformFeeRate())
-                .setScale(2, RoundingMode.HALF_UP);
+            BigDecimal fee = o.getTotalAmount()
+                    .multiply(tradeConfig.getPlatformFeeRate())
+                    .setScale(2, RoundingMode.HALF_UP);
 
-        Settlement s = new Settlement();
-        s.setSettlementNo(BizNoGenerator.settlementNo());
-        s.setOrderId(orderId);
-        s.setOrderNo(o.getOrderNo());
-        s.setSellerId(o.getSellerId());
-        s.setOrderAmount(o.getTotalAmount());
-        s.setPlatformFee(fee);
-        s.setSettleAmount(o.getTotalAmount().subtract(fee));
-        s.setEscrowAmount(payment != null ? payment.getAmount() : o.getTotalAmount());
-        s.setStatus(SettlementStatus.PENDING.name());
-        settlementMapper.insert(s);
+            Settlement s = new Settlement();
+            s.setSettlementNo(BizNoGenerator.settlementNo());
+            s.setOrderId(orderId);
+            s.setOrderNo(o.getOrderNo());
+            s.setSellerId(o.getSellerId());
+            s.setOrderAmount(o.getTotalAmount());
+            s.setPlatformFee(fee);
+            s.setSettleAmount(o.getTotalAmount().subtract(fee));
+            s.setEscrowAmount(payment != null ? payment.getAmount() : o.getTotalAmount());
+            s.setStatus(SettlementStatus.PENDING.name());
+            settlementMapper.insert(s);
 
-        auditService.log(null, null, "SETTLEMENT", "CREATE", "ORDER", orderId,
-                "amount=" + s.getSettleAmount());
-        return toResp(s);
+            auditService.logSync(null, null, "SETTLEMENT", "CREATE", "ORDER", orderId,
+                    "amount=" + s.getSettleAmount());
+            return toResp(s);
+        } finally {
+            distributedLock.unlock(lk);
+        }
     }
 
     @Override
     @Transactional
     public void executeSettlement(Long id) {
+        String lk = "settlement:" + id;
+        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            doExecuteSettlement(id);
+        } finally {
+            distributedLock.unlock(lk);
+        }
+    }
+
+    private void doExecuteSettlement(Long id) {
         Settlement s = settlementMapper.findById(id);
         if (s == null) throw new BizException(404, "Not found");
 
@@ -98,14 +116,20 @@ public class SettlementServiceImpl implements SettlementService {
     @Override
     @Transactional
     public SettlementResponse retrySettlement(Long id) {
-        Settlement s = settlementMapper.findById(id);
-        if (s == null) throw new BizException(404, "Not found");
-        if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
-            throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
-        if (settlementMapper.retryFailed(id) == 0)
-            throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
-        executeSettlement(id);
-        return getSettlement(id);
+        String lk = "settlement:" + id;
+        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            Settlement s = settlementMapper.findById(id);
+            if (s == null) throw new BizException(404, "Not found");
+            if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
+                throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
+            if (settlementMapper.retryFailed(id) == 0)
+                throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
+            doExecuteSettlement(id);
+            return getSettlement(id);
+        } finally {
+            distributedLock.unlock(lk);
+        }
     }
 
     @Override

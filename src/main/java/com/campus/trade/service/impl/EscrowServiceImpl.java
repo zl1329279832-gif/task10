@@ -57,7 +57,7 @@ public class EscrowServiceImpl implements EscrowService {
                     throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED);
                 if (paymentMapper.freeze(payment.getId(), from.name(), payment.getAmount(), reason) == 0)
                     throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED);
-                auditService.log(operatorId, null, "ESCROW", "FREEZE_PAYMENT", "PAYMENT", payment.getId(),
+                auditService.logSync(operatorId, null, "ESCROW", "FREEZE_PAYMENT", "PAYMENT", payment.getId(),
                         "reason=" + reason + ",amount=" + payment.getAmount());
             }
 
@@ -70,7 +70,7 @@ public class EscrowServiceImpl implements EscrowService {
                     throw new BizException(ErrorCode.SETTLEMENT_FREEZE_FAILED);
                 if (settlementMapper.freeze(settlement.getId(), from.name(), settlement.getSettleAmount(), reason) == 0)
                     throw new BizException(ErrorCode.SETTLEMENT_FREEZE_FAILED);
-                auditService.log(operatorId, null, "ESCROW", "FREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
+                auditService.logSync(operatorId, null, "ESCROW", "FREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
                         "reason=" + reason + ",amount=" + settlement.getSettleAmount());
             }
         } finally {
@@ -89,7 +89,7 @@ public class EscrowServiceImpl implements EscrowService {
             if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
                 if (paymentMapper.unfreeze(payment.getId(), PaymentStatus.SUCCESS.name()) == 0)
                     throw new BizException(ErrorCode.PAYMENT_UNFREEZE_FAILED);
-                auditService.log(operatorId, null, "ESCROW", "UNFREEZE_PAYMENT", "PAYMENT", payment.getId(),
+                auditService.logSync(operatorId, null, "ESCROW", "UNFREEZE_PAYMENT", "PAYMENT", payment.getId(),
                         "reason=" + reason);
             }
 
@@ -98,7 +98,7 @@ public class EscrowServiceImpl implements EscrowService {
             if (settlement != null && SettlementStatus.FROZEN.name().equals(settlement.getStatus())) {
                 if (settlementMapper.unfreeze(settlement.getId(), SettlementStatus.PENDING.name()) == 0)
                     throw new BizException(ErrorCode.SETTLEMENT_NOT_FROZEN);
-                auditService.log(operatorId, null, "ESCROW", "UNFREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
+                auditService.logSync(operatorId, null, "ESCROW", "UNFREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
                         "reason=" + reason);
             }
         } finally {
@@ -109,40 +109,49 @@ public class EscrowServiceImpl implements EscrowService {
     @Override
     @Transactional
     public void autoSettleOnReceipt(Long orderId, Long buyerId) {
-        Payment payment = paymentMapper.findByOrderId(orderId);
-        if (payment == null) {
-            log.warn("No payment found for auto-settle, orderId={}", orderId);
+        String lk = "order:" + orderId;
+        if (!distributedLock.tryLock(lk)) {
+            log.warn("Lock contention on auto-settle, orderId={}", orderId);
             return;
         }
-        // If frozen (dispute active), skip auto-settle
-        if (PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
-            log.info("Payment frozen, skipping auto-settle for orderId={}", orderId);
-            return;
-        }
-        if (!PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
-            log.warn("Payment not SUCCESS for auto-settle, orderId={}, status={}", orderId, payment.getStatus());
-            return;
-        }
-
-        // Check if settlement already exists
-        Settlement existing = settlementMapper.findByOrderId(orderId);
-        if (existing != null) {
-            log.info("Settlement already exists for orderId={}, status={}", orderId, existing.getStatus());
-            return;
-        }
-
-        // Create and execute settlement
         try {
-            SettlementResponse resp = settlementService.createSettlement(orderId);
-            settlementService.executeSettlement(resp.getId());
-            auditService.log(buyerId, null, "ESCROW", "AUTO_SETTLE", "ORDER", orderId,
-                    "settlementId=" + resp.getId());
-            log.info("Auto-settle completed for orderId={}", orderId);
-        } catch (Exception e) {
-            log.error("Auto-settle failed for orderId={}: {}", orderId, e.getMessage());
-            auditService.log(buyerId, null, "ESCROW", "AUTO_SETTLE_FAILED", "ORDER", orderId,
-                    "error=" + e.getMessage());
-            // Non-fatal: settlement can be retried manually
+            Payment payment = paymentMapper.findByOrderId(orderId);
+            if (payment == null) {
+                log.warn("No payment found for auto-settle, orderId={}", orderId);
+                return;
+            }
+            // If frozen (dispute active), skip auto-settle
+            if (PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
+                log.info("Payment frozen, skipping auto-settle for orderId={}", orderId);
+                return;
+            }
+            if (!PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
+                log.warn("Payment not SUCCESS for auto-settle, orderId={}, status={}", orderId, payment.getStatus());
+                return;
+            }
+
+            // Check if settlement already exists
+            Settlement existing = settlementMapper.findByOrderId(orderId);
+            if (existing != null) {
+                log.info("Settlement already exists for orderId={}, status={}", orderId, existing.getStatus());
+                return;
+            }
+
+            // Create and execute settlement
+            try {
+                SettlementResponse resp = settlementService.createSettlement(orderId);
+                settlementService.executeSettlement(resp.getId());
+                auditService.logSync(buyerId, null, "ESCROW", "AUTO_SETTLE", "ORDER", orderId,
+                        "settlementId=" + resp.getId());
+                log.info("Auto-settle completed for orderId={}", orderId);
+            } catch (Exception e) {
+                log.error("Auto-settle failed for orderId={}: {}", orderId, e.getMessage());
+                auditService.logSync(buyerId, null, "ESCROW", "AUTO_SETTLE_FAILED", "ORDER", orderId,
+                        "error=" + e.getMessage());
+                // Non-fatal: settlement can be retried manually
+            }
+        } finally {
+            distributedLock.unlock(lk);
         }
     }
 
@@ -151,21 +160,17 @@ public class EscrowServiceImpl implements EscrowService {
     public SettlementResponse retrySettlement(Long settlementId, Long operatorId) {
         Settlement s = settlementMapper.findById(settlementId);
         if (s == null) throw new BizException(404, "Settlement not found");
-        if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
-            throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
 
-        String lk = "settlement:" + settlementId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
-        try {
-            if (settlementMapper.retryFailed(settlementId) == 0)
-                throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
-            auditService.log(operatorId, null, "ESCROW", "RETRY_SETTLEMENT", "SETTLEMENT", settlementId,
-                    "retryCount=" + (s.getRetryCount() + 1));
-            // Re-execute
-            settlementService.executeSettlement(settlementId);
-            return settlementService.getSettlement(settlementId);
-        } finally {
-            distributedLock.unlock(lk);
-        }
+        // Guard: check payment not frozen before attempting retry
+        Payment payment = paymentMapper.findByOrderId(s.getOrderId());
+        if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus()))
+            throw new BizException(ErrorCode.PAYMENT_FROZEN);
+
+        // Delegate to settlement service (handles locking internally)
+        SettlementResponse result = settlementService.retrySettlement(settlementId);
+
+        auditService.logSync(operatorId, null, "ESCROW", "RETRY_SETTLEMENT", "SETTLEMENT", settlementId,
+                "retryCount=" + (s.getRetryCount() + 1));
+        return result;
     }
 }

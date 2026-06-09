@@ -273,7 +273,7 @@ class PaymentCallbackPollutionTest {
 
             String result = paymentService.simulatePayNotify("ORD007", "T007");
 
-            assertThat(result).isEqualTo("success");
+            assertThat(result).isEqualTo("failure");
             verify(paymentMapper, never()).findById(anyLong());
             verify(paymentMapper, never()).updateStatus(anyLong(), anyString(), anyString());
             verify(orderMapper, never()).findById(anyLong());

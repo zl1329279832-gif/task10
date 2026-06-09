@@ -135,22 +135,44 @@ class FundSplitIntegrationTest {
         verify(fundSplitMapper, never()).insert(any());
     }
 
-    @Test @DisplayName("Cancel active split for arbitration reversal") void cancelActiveSplit() {
+    @Test @DisplayName("Cancel active split reverses refund, settlement, and re-freezes payment") void cancelActiveSplit() {
         FundSplit active = new FundSplit();
         active.setId(1L); active.setStatus(FundSplitStatus.EXECUTED.name());
+        active.setPaymentId(1L); active.setBuyerRefundNo("REF001"); active.setSellerSettlementNo("STL001");
+
+        com.campus.trade.domain.entity.Refund refund = new com.campus.trade.domain.entity.Refund();
+        refund.setId(10L); refund.setRefundNo("REF001"); refund.setRefundAmount(new BigDecimal("80.00"));
+        refund.setStatus("SUCCESS");
+
+        Settlement settlement = new Settlement();
+        settlement.setId(20L); settlement.setSettlementNo("STL001"); settlement.setSettleAmount(new BigDecimal("117.60"));
+        settlement.setStatus("SETTLED");
+
+        Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"));
+        pmt.setStatus("SUCCESS"); // payment was unfrozen by original split
+
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(active);
         when(fundSplitMapper.updateStatus(1L, "EXECUTED", "CANCELLED")).thenReturn(1);
+        when(refundMapper.findByRefundNo("REF001")).thenReturn(refund);
+        when(refundMapper.updateStatus(10L, "SUCCESS", "REVERSED")).thenReturn(1);
+        when(settlementMapper.findBySettlementNo("STL001")).thenReturn(settlement);
+        when(settlementMapper.updateStatus(20L, "SETTLED", "REVERSED")).thenReturn(1);
+        when(paymentMapper.findById(1L)).thenReturn(pmt);
+        when(paymentMapper.freeze(eq(1L), eq("SUCCESS"), eq(new BigDecimal("200.00")), eq("Arbitration reversal"))).thenReturn(1);
 
-        fundSplitService.cancelActiveSplit(1L, 99L);
+        fundSplitService.cancelActiveSplit(1L, 100L, 99L);
 
         verify(fundSplitMapper).updateStatus(1L, "EXECUTED", "CANCELLED");
-        verify(auditService).log(eq(99L), isNull(), eq("FUND_SPLIT"), eq("CANCEL"), eq("FUND_SPLIT"), eq(1L), anyString());
+        verify(refundMapper).updateStatus(10L, "SUCCESS", "REVERSED");
+        verify(settlementMapper).updateStatus(20L, "SETTLED", "REVERSED");
+        verify(paymentMapper).freeze(1L, "SUCCESS", new BigDecimal("200.00"), "Arbitration reversal");
+        verify(auditService).logSync(eq(99L), isNull(), eq("FUND_SPLIT"), eq("CANCEL"), eq("FUND_SPLIT"), eq(1L), anyString());
     }
 
     @Test @DisplayName("Cancel no-op when no active split") void cancelNoOp() {
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(null);
 
-        fundSplitService.cancelActiveSplit(1L, 99L);
+        fundSplitService.cancelActiveSplit(1L, 100L, 99L);
 
         verify(fundSplitMapper, never()).updateStatus(anyLong(), anyString(), anyString());
     }

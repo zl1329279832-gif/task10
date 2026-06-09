@@ -57,6 +57,13 @@ public class FundSplitServiceImpl implements FundSplitService {
             Payment payment = paymentMapper.findById(paymentId);
             if (payment == null) throw new BizException(ErrorCode.PAYMENT_NOT_FOUND);
 
+            // Fund conservation assertion: refund + settle must equal payment amount
+            if (buyerRefundAmount.add(sellerSettleAmount).compareTo(payment.getAmount()) != 0) {
+                throw new BizException(ErrorCode.FUND_SPLIT_INVALID,
+                        "Conservation violated: refund(" + buyerRefundAmount + ") + settle(" + sellerSettleAmount
+                                + ") != payment(" + payment.getAmount() + ")");
+            }
+
             // Calculate platform fee on seller portion
             BigDecimal platformFee = sellerSettleAmount
                     .multiply(tradeConfig.getPlatformFeeRate())
@@ -114,13 +121,17 @@ public class FundSplitServiceImpl implements FundSplitService {
             if (PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
                 String targetStatus = buyerRefundAmount.compareTo(payment.getAmount()) >= 0
                         ? PaymentStatus.CLOSED.name() : PaymentStatus.SUCCESS.name();
-                paymentMapper.unfreeze(payment.getId(), targetStatus);
+                int unfrozen = paymentMapper.unfreeze(payment.getId(), targetStatus);
+                if (unfrozen == 0) {
+                    throw new BizException(ErrorCode.PAYMENT_UNFREEZE_FAILED,
+                            "Failed to unfreeze payment " + payment.getId() + " to " + targetStatus);
+                }
             }
 
             // Mark FundSplit as EXECUTED
             fundSplitMapper.updateStatus(split.getId(), FundSplitStatus.PENDING.name(), FundSplitStatus.EXECUTED.name());
 
-            auditService.log(operatorId, null, "FUND_SPLIT", "EXECUTE", "ORDER", orderId,
+            auditService.logSync(operatorId, null, "FUND_SPLIT", "EXECUTE", "ORDER", orderId,
                     "splitNo=" + split.getSplitNo() + ",buyerRefund=" + buyerRefundAmount
                             + ",sellerSettle=" + sellerSettleAmount + ",platformFee=" + platformFee);
 
@@ -132,7 +143,7 @@ public class FundSplitServiceImpl implements FundSplitService {
 
     @Override
     @Transactional
-    public void cancelActiveSplit(Long arbitrationId, Long operatorId) {
+    public void cancelActiveSplit(Long arbitrationId, Long orderId, Long operatorId) {
         FundSplit active = fundSplitMapper.findActiveByArbitrationId(arbitrationId);
         if (active == null) {
             log.info("No active fund split to cancel for arbitrationId={}", arbitrationId);
@@ -140,7 +151,43 @@ public class FundSplitServiceImpl implements FundSplitService {
         }
         if (fundSplitMapper.updateStatus(active.getId(), active.getStatus(), FundSplitStatus.CANCELLED.name()) == 0)
             throw new BizException(ErrorCode.FUND_SPLIT_EXECUTE_FAILED, "Failed to cancel fund split");
-        auditService.log(operatorId, null, "FUND_SPLIT", "CANCEL", "FUND_SPLIT", active.getId(),
+
+        // Reverse associated refund record (SUCCESS -> REVERSED)
+        if (active.getBuyerRefundNo() != null) {
+            Refund refund = refundMapper.findByRefundNo(active.getBuyerRefundNo());
+            if (refund != null && RefundStatus.SUCCESS.name().equals(refund.getStatus())) {
+                if (refundMapper.updateStatus(refund.getId(), RefundStatus.SUCCESS.name(), RefundStatus.REVERSED.name()) == 0) {
+                    throw new BizException(ErrorCode.FUND_SPLIT_EXECUTE_FAILED, "Failed to reverse refund " + refund.getRefundNo());
+                }
+                auditService.logSync(operatorId, null, "FUND_SPLIT", "REVERSE_REFUND", "REFUND", refund.getId(),
+                        "refundNo=" + refund.getRefundNo() + ",amount=" + refund.getRefundAmount());
+            }
+        }
+
+        // Reverse associated settlement record (SETTLED -> REVERSED)
+        if (active.getSellerSettlementNo() != null) {
+            Settlement settlement = settlementMapper.findBySettlementNo(active.getSellerSettlementNo());
+            if (settlement != null && SettlementStatus.SETTLED.name().equals(settlement.getStatus())) {
+                if (settlementMapper.updateStatus(settlement.getId(), SettlementStatus.SETTLED.name(), SettlementStatus.REVERSED.name()) == 0) {
+                    throw new BizException(ErrorCode.FUND_SPLIT_EXECUTE_FAILED, "Failed to reverse settlement " + settlement.getSettlementNo());
+                }
+                auditService.logSync(operatorId, null, "FUND_SPLIT", "REVERSE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
+                        "settlementNo=" + settlement.getSettlementNo() + ",amount=" + settlement.getSettleAmount());
+            }
+        }
+
+        // Re-freeze payment for new split (SUCCESS/CLOSED -> FROZEN)
+        Payment payment = paymentMapper.findById(active.getPaymentId());
+        if (payment != null && !PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
+            int frozen = paymentMapper.freeze(payment.getId(), payment.getStatus(), payment.getAmount(), "Arbitration reversal");
+            if (frozen == 0) {
+                throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED, "Failed to re-freeze payment " + payment.getId());
+            }
+            auditService.logSync(operatorId, null, "FUND_SPLIT", "REFREEZE_PAYMENT", "PAYMENT", payment.getId(),
+                    "reason=Arbitration reversal,amount=" + payment.getAmount());
+        }
+
+        auditService.logSync(operatorId, null, "FUND_SPLIT", "CANCEL", "FUND_SPLIT", active.getId(),
                 "arbitrationId=" + arbitrationId);
     }
 }

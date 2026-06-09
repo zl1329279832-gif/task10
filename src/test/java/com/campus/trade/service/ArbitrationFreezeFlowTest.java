@@ -109,7 +109,7 @@ class ArbitrationFreezeFlowTest {
         verify(disputeMapper).updateStatus(1L, "ARBITRATING", "RESOLVED");
     }
 
-    @Test @DisplayName("SELLER_WIN: unfreeze -> auto-settle -> order SHIPPED/PAID") void fullFlow_sellerWin() {
+    @Test @DisplayName("SELLER_WIN: fund split handles unfreeze internally -> order SHIPPED/PAID") void fullFlow_sellerWin() {
         mockCommonSetup();
         when(fundSplitService.executeFundSplit(anyLong(), eq(100L), eq(1L),
                 eq(BigDecimal.ZERO), eq(new BigDecimal("200.00")), eq(99L)))
@@ -121,7 +121,10 @@ class ArbitrationFreezeFlowTest {
         assertThat(result.getResult()).isEqualTo("SELLER_WIN");
         assertThat(result.getRefundAmount()).isEqualByComparingTo("0.00");
         assertThat(result.getSellerAmount()).isEqualByComparingTo("200.00");
-        verify(escrowService).unfreezeFunds(100L, 99L, "Arbitration: seller wins");
+        // No separate unfreeze call — executeFundSplit handles it internally
+        verify(escrowService, never()).unfreezeFunds(anyLong(), anyLong(), anyString());
+        verify(fundSplitService).executeFundSplit(anyLong(), eq(100L), eq(1L),
+                eq(BigDecimal.ZERO), eq(new BigDecimal("200.00")), eq(99L));
         verify(orderService).transitionOrder(eq(100L), eq(OrderStatus.PAID.name()), eq(99L), eq("Arbitration: seller wins"));
     }
 
@@ -189,7 +192,7 @@ class ArbitrationFreezeFlowTest {
         ArbitrationRequest req = buildReq("PARTIAL", new BigDecimal("80.00"), new BigDecimal("120.00"));
         Arbitration result = arbitrationService.reverseArbitration(99L, req);
 
-        verify(fundSplitService).cancelActiveSplit(1L, 99L);
+        verify(fundSplitService).cancelActiveSplit(1L, 100L, 99L);
         verify(arbitrationMapper).updateRuling(1L, "PARTIAL", "Test decision",
                 new BigDecimal("80.00"), new BigDecimal("120.00"));
         verify(fundSplitService).executeFundSplit(eq(1L), eq(100L), eq(1L),

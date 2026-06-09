@@ -34,9 +34,9 @@ class PaymentStateTransitionTest {
         @Test @DisplayName("FROZEN -> PENDING") void frozenToPending() {
             assertThat(PaymentStateTransition.isValid(PaymentStatus.FROZEN, PaymentStatus.PENDING)).isFalse();
         }
-        @Test @DisplayName("CLOSED is terminal") void closedToAnything() {
+        @Test @DisplayName("CLOSED can only transition to FROZEN (arbitration reversal)") void closedToAnything() {
             assertThat(PaymentStateTransition.isValid(PaymentStatus.CLOSED, PaymentStatus.SUCCESS)).isFalse();
-            assertThat(PaymentStateTransition.isValid(PaymentStatus.CLOSED, PaymentStatus.FROZEN)).isFalse();
+            assertThat(PaymentStateTransition.isValid(PaymentStatus.CLOSED, PaymentStatus.FROZEN)).isTrue();
             assertThat(PaymentStateTransition.isValid(PaymentStatus.CLOSED, PaymentStatus.PENDING)).isFalse();
         }
         @Test @DisplayName("SUCCESS -> PENDING") void successToPending() {

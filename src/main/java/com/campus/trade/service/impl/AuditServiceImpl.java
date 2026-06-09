@@ -38,4 +38,22 @@ public class AuditServiceImpl implements AuditService {
     public void log(String module, String action, String targetType, Long targetId, String detail) {
         log(null, null, module, action, targetType, targetId, detail);
     }
+
+    @Override
+    public void logSync(Long userId, String username, String module, String action,
+                        String targetType, Long targetId, String detail) {
+        try {
+            AuditLog a = new AuditLog();
+            a.setUserId(userId);
+            a.setUsername(username);
+            a.setModule(module);
+            a.setAction(action);
+            a.setTargetType(targetType);
+            a.setTargetId(targetId);
+            a.setDetail(detail);
+            auditLogMapper.insert(a);
+        } catch (Exception e) {
+            log.error("Sync audit log failed: module={},action={}", module, action, e);
+        }
+    }
 }

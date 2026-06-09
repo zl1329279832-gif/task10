@@ -5,9 +5,10 @@ import java.util.Set;
 
 public enum SettlementStateTransition {
     PENDING(SettlementStatus.SETTLED, SettlementStatus.FROZEN, SettlementStatus.FAILED),
-    SETTLED(),
+    SETTLED(SettlementStatus.REVERSED),
     FAILED(SettlementStatus.PENDING),
-    FROZEN(SettlementStatus.PENDING);
+    FROZEN(SettlementStatus.PENDING),
+    REVERSED();
 
     private final Set<SettlementStatus> validTargets;
 

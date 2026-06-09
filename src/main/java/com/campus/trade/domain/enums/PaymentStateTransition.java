@@ -7,7 +7,7 @@ public enum PaymentStateTransition {
     PENDING(PaymentStatus.SUCCESS, PaymentStatus.CLOSED),
     SUCCESS(PaymentStatus.FROZEN),
     FROZEN(PaymentStatus.SUCCESS, PaymentStatus.CLOSED),
-    CLOSED();
+    CLOSED(PaymentStatus.FROZEN);
 
     private final Set<PaymentStatus> validTargets;
 

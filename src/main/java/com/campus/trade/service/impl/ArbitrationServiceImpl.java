@@ -111,8 +111,7 @@ public class ArbitrationServiceImpl implements ArbitrationService {
                     orderService.transitionOrder(o.getId(), OrderStatus.REFUNDED.name(), adminId, "Arbitration: buyer wins");
                 }
                 case SELLER_WIN -> {
-                    // Unfreeze payment, auto-settle to seller
-                    escrowService.unfreezeFunds(o.getId(), adminId, "Arbitration: seller wins");
+                    // Full settle to seller, unfreeze handled inside executeFundSplit
                     fundSplitService.executeFundSplit(a.getId(), o.getId(), payment.getId(),
                             buyerRefundAmount, sellerSettleAmount, adminId);
                     String ts = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
@@ -128,7 +127,7 @@ public class ArbitrationServiceImpl implements ArbitrationService {
                 }
             }
 
-            auditService.log(adminId, null, "ARBITRATION", "DECIDE", "DISPUTE", d.getId(),
+            auditService.logSync(adminId, null, "ARBITRATION", "DECIDE", "DISPUTE", d.getId(),
                     "result=" + req.getResult() + ",buyerRefund=" + buyerRefundAmount + ",sellerSettle=" + sellerSettleAmount);
             return a;
         } finally {
@@ -178,8 +177,8 @@ public class ArbitrationServiceImpl implements ArbitrationService {
         String lk = "arbitrate:" + d.getId();
         if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            // Cancel old fund split
-            fundSplitService.cancelActiveSplit(existing.getId(), adminId);
+            // Cancel old fund split (reverses refund/settlement records and re-freezes payment)
+            fundSplitService.cancelActiveSplit(existing.getId(), o.getId(), adminId);
 
             // Update arbitration ruling in place
             arbitrationMapper.updateRuling(existing.getId(), req.getResult(), req.getDecision(),
@@ -193,13 +192,11 @@ public class ArbitrationServiceImpl implements ArbitrationService {
                 case BUYER_WIN -> {
                     fundSplitService.executeFundSplit(existing.getId(), o.getId(), payment.getId(),
                             buyerRefundAmount, sellerSettleAmount, adminId);
-                    // Transition order to REFUNDED if not already
                     if (!OrderStatus.REFUNDED.name().equals(o.getStatus())) {
                         orderService.transitionOrder(o.getId(), OrderStatus.REFUNDED.name(), adminId, "Arbitration reversal: buyer wins");
                     }
                 }
                 case SELLER_WIN -> {
-                    escrowService.unfreezeFunds(o.getId(), adminId, "Arbitration reversal: seller wins");
                     fundSplitService.executeFundSplit(existing.getId(), o.getId(), payment.getId(),
                             buyerRefundAmount, sellerSettleAmount, adminId);
                     String ts = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
@@ -221,7 +218,7 @@ public class ArbitrationServiceImpl implements ArbitrationService {
             // Re-resolve dispute
             disputeMapper.updateStatus(d.getId(), "ARBITRATING", "RESOLVED");
 
-            auditService.log(adminId, null, "ARBITRATION", "REVERSE", "DISPUTE", d.getId(),
+            auditService.logSync(adminId, null, "ARBITRATION", "REVERSE", "DISPUTE", d.getId(),
                     "newResult=" + req.getResult() + ",buyerRefund=" + buyerRefundAmount + ",sellerSettle=" + sellerSettleAmount);
             return arbitrationMapper.findById(existing.getId());
         } finally {

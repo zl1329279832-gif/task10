@@ -144,8 +144,7 @@ public class PaymentServiceImpl implements PaymentService {
         String lockKey = "order:" + payment.getOrderId();
         if (!distributedLock.tryLock(lockKey)) {
             log.warn("Lock contention on order:{}, callback will be retried by Alipay", payment.getOrderId());
-            // Return "success" to avoid Alipay escalating; the callback is idempotent-safe
-            return "success";
+            return "failure";
         }
         try {
             // ── Re-read payment inside lock to avoid stale snapshot ──
