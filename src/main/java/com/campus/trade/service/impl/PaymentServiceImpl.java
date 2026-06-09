@@ -7,6 +7,7 @@ import com.alipay.api.request.AlipayTradePagePayRequest;
 import com.campus.trade.common.config.AlipayConfig;
 import com.campus.trade.common.exception.BizException;
 import com.campus.trade.common.exception.ErrorCode;
+import com.campus.trade.common.util.DistributedLock;
 import com.campus.trade.domain.entity.Order;
 import com.campus.trade.domain.entity.Payment;
 import com.campus.trade.domain.enums.OrderStatus;
@@ -35,6 +36,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final OrderService orderService;
     private final InventoryService inventoryService;
     private final AuditService auditService;
+    private final DistributedLock distributedLock;
 
     @Override
     @Transactional
@@ -103,17 +105,19 @@ public class PaymentServiceImpl implements PaymentService {
             return "failure";
         }
 
-        paymentMapper.incrementNotifyCount(payment.getId());
-        paymentMapper.updateCallbackContent(payment.getId(), params.toString());
-
+        // Fast-path: already processed — just acknowledge
         if (PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
-            log.info("Dup callback: {}", outTradeNo);
+            log.info("Dup callback for SUCCESS payment: {}", outTradeNo);
             return "success";
         }
         if (PaymentStatus.CLOSED.name().equals(payment.getStatus())) {
-            log.warn("Callback for CLOSED: {}", outTradeNo);
+            log.warn("Callback for CLOSED payment: {}", outTradeNo);
             return "success";
         }
+
+        // Only record callback details for payments that are still actionable
+        paymentMapper.incrementNotifyCount(payment.getId());
+        paymentMapper.updateCallbackContent(payment.getId(), params.toString());
 
         if ("TRADE_SUCCESS".equals(tradeStatus) || "TRADE_FINISHED".equals(tradeStatus))
             return processSuccess(payment, tradeNo, totalAmount);
@@ -137,31 +141,112 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     private String processSuccess(Payment payment, String tradeNo, String totalAmount) {
-        if (!payment.getAmount().toPlainString().equals(totalAmount)) {
-            log.error("Amount mismatch: expected={},actual={}", payment.getAmount(), totalAmount);
-            auditService.log(null, null, "PAYMENT", "AMOUNT_MISMATCH", "PAYMENT", payment.getId(),
-                    "expected=" + payment.getAmount() + ",actual=" + totalAmount);
-        }
-        if (paymentMapper.updateStatus(payment.getId(), "PENDING", "SUCCESS") == 0) {
-            log.info("Already processed: {}", payment.getPaymentNo());
+        String lockKey = "order:" + payment.getOrderId();
+        if (!distributedLock.tryLock(lockKey)) {
+            log.warn("Lock contention on order:{}, callback will be retried by Alipay", payment.getOrderId());
+            // Return "success" to avoid Alipay escalating; the callback is idempotent-safe
             return "success";
         }
+        try {
+            // ── Re-read payment inside lock to avoid stale snapshot ──
+            Payment fresh = paymentMapper.findById(payment.getId());
+            if (fresh == null) {
+                log.error("Payment vanished inside lock: {}", payment.getPaymentNo());
+                return "success";
+            }
 
-        LocalDateTime now = LocalDateTime.now();
-        paymentMapper.updateTradeNo(payment.getId(), tradeNo, now);
+            // Already processed (duplicate / concurrent callback won the race)
+            if (PaymentStatus.SUCCESS.name().equals(fresh.getStatus())) {
+                log.info("Duplicate callback (already SUCCESS): {}", payment.getPaymentNo());
+                return "success";
+            }
+            if (!PaymentStatus.PENDING.name().equals(fresh.getStatus())) {
+                log.warn("Payment not PENDING inside lock: status={}", fresh.getStatus());
+                return "success";
+            }
 
-        Order order = orderMapper.findById(payment.getOrderId());
-        if (order == null || !OrderStatus.CREATED.name().equals(order.getStatus())) {
-            log.warn("Order not in CREATED when callback: {}", order != null ? order.getStatus() : "null");
+            // ── 1. Order must exist and be in CREATED state ──
+            Order order = orderMapper.findById(payment.getOrderId());
+            if (order == null || !OrderStatus.CREATED.name().equals(order.getStatus())) {
+                String actualStatus = order != null ? order.getStatus() : "NULL";
+                log.warn("Late callback rejected — order status={}, paymentNo={}", actualStatus, payment.getPaymentNo());
+                auditService.log(null, null, "PAYMENT", "CALLBACK_REJECTED_ORDER_NOT_CREATED",
+                        "ORDER", payment.getOrderId(),
+                        "orderStatus=" + actualStatus + ",tradeNo=" + tradeNo);
+                return "success";
+            }
+
+            // ── 2. Amount must match exactly ──
+            if (!payment.getAmount().toPlainString().equals(totalAmount)) {
+                log.error("Amount mismatch: expected={}, actual={}, paymentNo={}",
+                        payment.getAmount(), totalAmount, payment.getPaymentNo());
+                auditService.log(null, null, "PAYMENT", "AMOUNT_MISMATCH",
+                        "PAYMENT", payment.getId(),
+                        "expected=" + payment.getAmount() + ",actual=" + totalAmount);
+                return "success";
+            }
+
+            // ── 3. trade_no must not be already claimed by another payment ──
+            if (tradeNo != null) {
+                Payment existingByTrade = paymentMapper.findByTradeNo(tradeNo);
+                if (existingByTrade != null && !existingByTrade.getId().equals(payment.getId())) {
+                    log.error("trade_no={} already used by paymentId={}, rejecting for paymentId={}",
+                            tradeNo, existingByTrade.getId(), payment.getId());
+                    auditService.log(null, null, "PAYMENT", "TRADE_NO_DUPLICATE",
+                            "PAYMENT", payment.getId(),
+                            "tradeNo=" + tradeNo + ",existingPaymentId=" + existingByTrade.getId());
+                    return "success";
+                }
+            }
+
+            // ── All guards passed — safe to transition ──
+
+            // 4. Optimistic-lock payment PENDING → SUCCESS
+            if (paymentMapper.updateStatus(payment.getId(), "PENDING", "SUCCESS") == 0) {
+                log.info("Payment CAS failed (already processed): {}", payment.getPaymentNo());
+                return "success";
+            }
+
+            // 5. Record trade_no and paidAt
+            LocalDateTime now = LocalDateTime.now();
+            paymentMapper.updateTradeNo(payment.getId(), tradeNo, now);
+
+            // 6. Transition order CREATED → PAID (lock-free, caller holds the lock)
+            try {
+                orderService.transitionToPaidInternal(order.getId(), "Payment callback received");
+            } catch (BizException e) {
+                // Order transition failed (concurrent cancel won the DB race) —
+                // payment is already SUCCESS; this inconsistency needs manual reconciliation.
+                log.error("Order transition to PAID failed after payment SUCCESS: orderId={}, error={}",
+                        order.getId(), e.getMessage());
+                auditService.log(null, null, "PAYMENT", "ORDER_TRANSITION_FAILED",
+                        "ORDER", order.getId(),
+                        "paymentStatus=SUCCESS,orderTransitionError=" + e.getMessage());
+                return "success";
+            }
+
+            // 7. Record pay time on order
+            orderMapper.updatePayInfo(order.getId(), now);
+
+            // 8. Deduct inventory (stock was locked at order creation)
+            inventoryService.deductStock(order.getSkuId(), order.getQuantity());
+
+            // 9. Audit trail
+            auditService.log(null, null, "PAYMENT", "SUCCESS", "ORDER", order.getId(),
+                    "tradeNo=" + tradeNo);
+            log.info("Payment success: orderNo={}, tradeNo={}", order.getOrderNo(), tradeNo);
             return "success";
-        }
 
-        orderService.transitionOrder(order.getId(), OrderStatus.PAID.name(), null, "Payment received");
-        orderMapper.updatePayInfo(order.getId(), now);
-        inventoryService.deductStock(order.getSkuId(), order.getQuantity());
-        auditService.log(null, null, "PAYMENT", "SUCCESS", "ORDER", order.getId(), "tradeNo=" + tradeNo);
-        log.info("Payment success: orderNo={}, tradeNo={}", order.getOrderNo(), tradeNo);
-        return "success";
+        } catch (BizException e) {
+            // Any expected business error — audit it and acknowledge callback
+            log.warn("BizException in processSuccess: paymentNo={}, error={}",
+                    payment.getPaymentNo(), e.getMessage());
+            auditService.log(null, null, "PAYMENT", "CALLBACK_BIZ_ERROR",
+                    "PAYMENT", payment.getId(), "error=" + e.getMessage());
+            return "success";
+        } finally {
+            distributedLock.unlock(lockKey);
+        }
     }
 
     private String buildAlipayForm(Payment payment, Order order) {

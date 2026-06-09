@@ -182,6 +182,19 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    @Transactional
+    public void transitionToPaidInternal(Long orderId, String remark) {
+        Order o = orderMapper.findById(orderId);
+        if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
+        OrderStatus from = OrderStatus.valueOf(o.getStatus());
+        if (!OrderStateTransition.isValid(from, OrderStatus.PAID))
+            throw new BizException(ErrorCode.ORDER_STATUS_INVALID, from.name() + " -> PAID");
+        if (orderMapper.updateStatus(orderId, from.name(), OrderStatus.PAID.name()) == 0)
+            throw new BizException(ErrorCode.ORDER_STATUS_INVALID, "Concurrent modification");
+        logTransition(orderId, from.name(), OrderStatus.PAID.name(), null, remark);
+    }
+
+    @Override
     @Scheduled(fixedDelay = 60_000)
     @Transactional
     public void closeExpiredOrders() {

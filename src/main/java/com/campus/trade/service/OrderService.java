@@ -13,5 +13,7 @@ public interface OrderService {
     void shipOrder(Long sellerId, ShipRequest request);
     void confirmReceive(Long buyerId, Long orderId);
     void transitionOrder(Long orderId, String toStatus, Long operatorId, String remark);
+    /** Lock-free transition to PAID — caller must already hold the distributed lock on this order. */
+    void transitionToPaidInternal(Long orderId, String remark);
     void closeExpiredOrders();
 }
