@@ -2,6 +2,7 @@ package com.campus.trade.mapper;
 import com.campus.trade.domain.entity.FundSplit;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import java.math.BigDecimal;
 import java.util.List;
 @Mapper
 public interface FundSplitMapper {
@@ -14,4 +15,5 @@ public interface FundSplitMapper {
     int updateStatus(@Param("id") Long id, @Param("fromStatus") String fromStatus, @Param("toStatus") String toStatus);
     int updateBuyerRefundNo(@Param("id") Long id, @Param("buyerRefundNo") String buyerRefundNo);
     int updateSellerSettlementNo(@Param("id") Long id, @Param("sellerSettlementNo") String sellerSettlementNo);
+    BigDecimal sumActiveSplitAmountsByOrderId(@Param("orderId") Long orderId);
 }

@@ -15,5 +15,7 @@ public interface OrderService {
     void transitionOrder(Long orderId, String toStatus, Long operatorId, String remark);
     /** Lock-free transition to PAID — caller must already hold the distributed lock on this order. */
     void transitionToPaidInternal(Long orderId, String remark);
+    /** Lock-free generic transition — caller must already hold the distributed lock on this order. */
+    void transitionOrderInternal(Long orderId, String toStatus, Long operatorId, String remark);
     void closeExpiredOrders();
 }

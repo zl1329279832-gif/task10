@@ -36,7 +36,11 @@ public class IdempotentAspect {
             idempotentMapper.insert(record);
         } catch (org.springframework.dao.DuplicateKeyException e) {
             com.campus.trade.domain.entity.Idempotent existing = idempotentMapper.findByKey(bizType, key);
-            if (existing != null && "SUCCESS".equals(existing.getStatus())) { log.info("Idempotent dup: {}",key); return null; }
+            if (existing != null && "SUCCESS".equals(existing.getStatus())) {
+                log.info("Idempotent dup: {}", key);
+                String retVal = idempotent.duplicateReturnValue();
+                return retVal.isEmpty() ? null : retVal;
+            }
             throw new BizException(ErrorCode.IDEMPOTENT_PROCESSING);
         }
         try {

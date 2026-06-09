@@ -15,9 +15,12 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -44,6 +47,7 @@ class ArbitrationFreezeFlowTest {
     @Mock private AuditService auditService;
     @Mock private DistributedLock distributedLock;
     @Mock private TradeConfig tradeConfig;
+    @Mock private TransactionTemplate transactionTemplate;
 
     private com.campus.trade.domain.entity.Order order;
     private Payment payment;
@@ -66,6 +70,19 @@ class ArbitrationFreezeFlowTest {
         dispute.setStatus(DisputeStatus.ARBITRATING.name());
     }
 
+    @BeforeEach
+    void setupTransactionTemplate() {
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        lenient().doAnswer(invocation -> {
+            Consumer<?> consumer = invocation.getArgument(0);
+            consumer.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
+    }
+
     private ArbitrationRequest buildReq(String result, BigDecimal refundAmount, BigDecimal sellerAmount) {
         ArbitrationRequest r = new ArbitrationRequest();
         r.setDisputeId(1L); r.setResult(result); r.setDecision("Test decision");
@@ -78,7 +95,7 @@ class ArbitrationFreezeFlowTest {
         when(arbitrationMapper.findByDisputeId(1L)).thenReturn(null); // first call: no existing
         when(orderMapper.findById(100L)).thenReturn(order);
         when(paymentMapper.findByOrderId(100L)).thenReturn(payment);
-        when(distributedLock.tryLock("arbitrate:1")).thenReturn(true);
+        when(distributedLock.tryLock("arbitrate:1")).thenReturn(new DistributedLock.LockHandle("arbitrate:1", "token"));
         when(arbitrationMapper.insert(any())).thenAnswer(inv -> {
             Arbitration a = inv.getArgument(0);
             a.setId(1L);
@@ -93,9 +110,6 @@ class ArbitrationFreezeFlowTest {
 
     @Test @DisplayName("BUYER_WIN: full refund -> order REFUNDED") void fullFlow_buyerWin() {
         mockCommonSetup();
-        when(fundSplitService.executeFundSplit(anyLong(), eq(100L), eq(1L),
-                eq(new BigDecimal("200.00")), eq(BigDecimal.ZERO), eq(99L)))
-                .thenReturn(new FundSplit());
 
         ArbitrationRequest req = buildReq("BUYER_WIN", new BigDecimal("200.00"), null);
         Arbitration result = arbitrationService.arbitrate(99L, req);
@@ -103,17 +117,14 @@ class ArbitrationFreezeFlowTest {
         assertThat(result.getResult()).isEqualTo("BUYER_WIN");
         assertThat(result.getRefundAmount()).isEqualByComparingTo("200.00");
         assertThat(result.getSellerAmount()).isEqualByComparingTo("0.00");
-        verify(fundSplitService).executeFundSplit(anyLong(), eq(100L), eq(1L),
+        verify(fundSplitService).executeFundSplitInternal(anyLong(), eq(100L), eq(1L),
                 eq(new BigDecimal("200.00")), eq(BigDecimal.ZERO), eq(99L));
-        verify(orderService).transitionOrder(100L, OrderStatus.REFUNDED.name(), 99L, "Arbitration: buyer wins");
+        verify(orderService).transitionOrderInternal(100L, OrderStatus.REFUNDED.name(), 99L, "Arbitration: buyer wins");
         verify(disputeMapper).updateStatus(1L, "ARBITRATING", "RESOLVED");
     }
 
     @Test @DisplayName("SELLER_WIN: unfreeze -> auto-settle -> order SHIPPED/PAID") void fullFlow_sellerWin() {
         mockCommonSetup();
-        when(fundSplitService.executeFundSplit(anyLong(), eq(100L), eq(1L),
-                eq(BigDecimal.ZERO), eq(new BigDecimal("200.00")), eq(99L)))
-                .thenReturn(new FundSplit());
 
         ArbitrationRequest req = buildReq("SELLER_WIN", null, null);
         Arbitration result = arbitrationService.arbitrate(99L, req);
@@ -121,15 +132,12 @@ class ArbitrationFreezeFlowTest {
         assertThat(result.getResult()).isEqualTo("SELLER_WIN");
         assertThat(result.getRefundAmount()).isEqualByComparingTo("0.00");
         assertThat(result.getSellerAmount()).isEqualByComparingTo("200.00");
-        verify(escrowService).unfreezeFunds(100L, 99L, "Arbitration: seller wins");
-        verify(orderService).transitionOrder(eq(100L), eq(OrderStatus.PAID.name()), eq(99L), eq("Arbitration: seller wins"));
+        verify(escrowService).unfreezeFundsInternal(100L, 99L, "Arbitration: seller wins");
+        verify(orderService).transitionOrderInternal(eq(100L), eq(OrderStatus.PAID.name()), eq(99L), eq("Arbitration: seller wins"));
     }
 
     @Test @DisplayName("PARTIAL: fund split with buyer refund + seller settle") void fullFlow_partial() {
         mockCommonSetup();
-        when(fundSplitService.executeFundSplit(anyLong(), eq(100L), eq(1L),
-                eq(new BigDecimal("80.00")), eq(new BigDecimal("120.00")), eq(99L)))
-                .thenReturn(new FundSplit());
 
         ArbitrationRequest req = buildReq("PARTIAL", new BigDecimal("80.00"), new BigDecimal("120.00"));
         Arbitration result = arbitrationService.arbitrate(99L, req);
@@ -137,7 +145,7 @@ class ArbitrationFreezeFlowTest {
         assertThat(result.getResult()).isEqualTo("PARTIAL");
         assertThat(result.getRefundAmount()).isEqualByComparingTo("80.00");
         assertThat(result.getSellerAmount()).isEqualByComparingTo("120.00");
-        verify(fundSplitService).executeFundSplit(anyLong(), eq(100L), eq(1L),
+        verify(fundSplitService).executeFundSplitInternal(anyLong(), eq(100L), eq(1L),
                 eq(new BigDecimal("80.00")), eq(new BigDecimal("120.00")), eq(99L));
     }
 
@@ -158,7 +166,7 @@ class ArbitrationFreezeFlowTest {
 
         assertThat(result).isSameAs(existing);
         verify(arbitrationMapper, never()).insert(any());
-        verify(fundSplitService, never()).executeFundSplit(anyLong(), anyLong(), anyLong(), any(), any(), anyLong());
+        verify(fundSplitService, never()).executeFundSplitInternal(anyLong(), anyLong(), anyLong(), any(), any(), anyLong());
     }
 
     // ═══════════════════════════════════════════
@@ -175,12 +183,10 @@ class ArbitrationFreezeFlowTest {
         when(arbitrationMapper.findByDisputeId(1L)).thenReturn(oldArb);
         when(orderMapper.findById(100L)).thenReturn(order);
         when(paymentMapper.findByOrderId(100L)).thenReturn(payment);
-        when(distributedLock.tryLock("arbitrate:1")).thenReturn(true);
+        when(distributedLock.tryLock("arbitrate:1")).thenReturn(new DistributedLock.LockHandle("arbitrate:1", "token"));
         when(arbitrationMapper.updateRuling(eq(1L), anyString(), anyString(), any(), any())).thenReturn(1);
         when(disputeMapper.updateStatus(1L, "RESOLVED", "ARBITRATING")).thenReturn(1);
         when(disputeMapper.updateStatus(1L, "ARBITRATING", "RESOLVED")).thenReturn(1);
-        when(fundSplitService.executeFundSplit(anyLong(), anyLong(), anyLong(), any(), any(), anyLong()))
-                .thenReturn(new FundSplit());
         Arbitration updated = new Arbitration();
         updated.setId(1L); updated.setResult("PARTIAL");
         updated.setRefundAmount(new BigDecimal("80.00")); updated.setSellerAmount(new BigDecimal("120.00"));
@@ -189,10 +195,10 @@ class ArbitrationFreezeFlowTest {
         ArbitrationRequest req = buildReq("PARTIAL", new BigDecimal("80.00"), new BigDecimal("120.00"));
         Arbitration result = arbitrationService.reverseArbitration(99L, req);
 
-        verify(fundSplitService).cancelActiveSplit(1L, 99L);
+        verify(fundSplitService).cancelActiveSplitInternal(1L, 99L);
         verify(arbitrationMapper).updateRuling(1L, "PARTIAL", "Test decision",
                 new BigDecimal("80.00"), new BigDecimal("120.00"));
-        verify(fundSplitService).executeFundSplit(eq(1L), eq(100L), eq(1L),
+        verify(fundSplitService).executeFundSplitInternal(eq(1L), eq(100L), eq(1L),
                 eq(new BigDecimal("80.00")), eq(new BigDecimal("120.00")), eq(99L));
         assertThat(result.getResult()).isEqualTo("PARTIAL");
     }

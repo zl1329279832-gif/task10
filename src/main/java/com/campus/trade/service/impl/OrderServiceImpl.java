@@ -21,10 +21,10 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.List;
 
 @Slf4j
 @Service
@@ -40,6 +40,7 @@ public class OrderServiceImpl implements OrderService {
     private final AuditService auditService;
     private final DistributedLock distributedLock;
     private final TradeConfig tradeConfig;
+    private final TransactionTemplate transactionTemplate;
     @Autowired @Lazy private EscrowService escrowService;
 
     @Override
@@ -105,90 +106,97 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    @Transactional
     public void cancelOrder(Long buyerId, Long orderId) {
-        Order o = orderMapper.findById(orderId);
-        if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
-        if (!o.getBuyerId().equals(buyerId)) throw new BizException(ErrorCode.ORDER_NOT_BUYER);
-        if (!OrderStatus.CREATED.name().equals(o.getStatus())) throw new BizException(ErrorCode.ORDER_CANNOT_CANCEL);
-
-        String lk = "order:" + orderId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            if (orderMapper.updateStatus(orderId, "CREATED", "CANCELLED") == 0)
-                throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
-            orderMapper.updateCloseInfo(orderId, LocalDateTime.now(), "Buyer cancelled");
-            logTransition(orderId, "CREATED", "CANCELLED", buyerId, "Buyer cancelled");
-            inventoryService.releaseStock(o.getSkuId(), o.getQuantity());
+            transactionTemplate.executeWithoutResult(status -> {
+                Order o = orderMapper.findById(orderId);
+                if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
+                if (!o.getBuyerId().equals(buyerId)) throw new BizException(ErrorCode.ORDER_NOT_BUYER);
+                if (!OrderStatus.CREATED.name().equals(o.getStatus())) throw new BizException(ErrorCode.ORDER_CANNOT_CANCEL);
+                if (orderMapper.updateStatus(orderId, "CREATED", "CANCELLED") == 0)
+                    throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
+                orderMapper.updateCloseInfo(orderId, LocalDateTime.now(), "Buyer cancelled");
+                logTransition(orderId, "CREATED", "CANCELLED", buyerId, "Buyer cancelled");
+                inventoryService.releaseStock(o.getSkuId(), o.getQuantity());
+            });
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 
     @Override
-    @Transactional
     public void shipOrder(Long sellerId, ShipRequest req) {
         Order o = orderMapper.findById(req.getOrderId());
         if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
         if (!o.getSellerId().equals(sellerId)) throw new BizException(ErrorCode.ORDER_NOT_SELLER);
 
-        String lk = "order:" + o.getId();
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + o.getId());
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            if (orderMapper.updateStatus(o.getId(), "PAID", "SHIPPED") == 0)
-                throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
-            orderMapper.updateShipInfo(o.getId(), req.getLogisticsNo(), req.getLogisticsCompany(), LocalDateTime.now());
-            logTransition(o.getId(), "PAID", "SHIPPED", sellerId, "Shipped: " + req.getLogisticsNo());
+            transactionTemplate.executeWithoutResult(status -> {
+                if (orderMapper.updateStatus(o.getId(), "PAID", "SHIPPED") == 0)
+                    throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
+                orderMapper.updateShipInfo(o.getId(), req.getLogisticsNo(), req.getLogisticsCompany(), LocalDateTime.now());
+                logTransition(o.getId(), "PAID", "SHIPPED", sellerId, "Shipped: " + req.getLogisticsNo());
+            });
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 
     @Override
-    @Transactional
     public void confirmReceive(Long buyerId, Long orderId) {
         Order o = orderMapper.findById(orderId);
         if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
         if (!o.getBuyerId().equals(buyerId)) throw new BizException(ErrorCode.ORDER_NOT_BUYER);
 
-        String lk = "order:" + orderId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            if (orderMapper.updateStatus(orderId, "SHIPPED", "RECEIVED") == 0)
-                throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
-            orderMapper.updateReceiveInfo(orderId, LocalDateTime.now());
-            logTransition(orderId, "SHIPPED", "RECEIVED", buyerId, "Confirmed receipt");
-        } finally {
-            distributedLock.unlock(lk);
-        }
+            transactionTemplate.executeWithoutResult(status -> {
+                if (orderMapper.updateStatus(orderId, "SHIPPED", "RECEIVED") == 0)
+                    throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
+                orderMapper.updateReceiveInfo(orderId, LocalDateTime.now());
+                logTransition(orderId, "SHIPPED", "RECEIVED", buyerId, "Confirmed receipt");
 
-        // Auto-settle from escrow on receipt confirmation (non-fatal)
-        try {
-            escrowService.autoSettleOnReceipt(orderId, buyerId);
-        } catch (Exception e) {
-            log.warn("Auto-settle failed on receipt for orderId={}: {}", orderId, e.getMessage());
+                // Bug 7 fix: auto-settle INSIDE lock+TX, using lock-free internal variant
+                try {
+                    escrowService.autoSettleOnReceiptInternal(orderId, buyerId);
+                } catch (Exception e) {
+                    log.warn("Auto-settle failed on receipt for orderId={}: {}", orderId, e.getMessage());
+                }
+            });
+        } finally {
+            distributedLock.unlock(handle);
         }
     }
 
     @Override
-    @Transactional
     public void transitionOrder(Long orderId, String toStatus, Long operatorId, String remark) {
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            transactionTemplate.executeWithoutResult(status -> {
+                transitionOrderInternal(orderId, toStatus, operatorId, remark);
+            });
+        } finally {
+            distributedLock.unlock(handle);
+        }
+    }
+
+    @Override
+    public void transitionOrderInternal(Long orderId, String toStatus, Long operatorId, String remark) {
         Order o = orderMapper.findById(orderId);
         if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
         OrderStatus from = OrderStatus.valueOf(o.getStatus());
         OrderStatus to = OrderStatus.valueOf(toStatus);
         if (!OrderStateTransition.isValid(from, to))
             throw new BizException(ErrorCode.ORDER_STATUS_INVALID, from.name() + " -> " + to.name());
-
-        String lk = "order:" + orderId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
-        try {
-            if (orderMapper.updateStatus(orderId, from.name(), to.name()) == 0)
-                throw new BizException(ErrorCode.ORDER_STATUS_INVALID, "Concurrent modification");
-            logTransition(orderId, from.name(), to.name(), operatorId, remark);
-        } finally {
-            distributedLock.unlock(lk);
-        }
+        if (orderMapper.updateStatus(orderId, from.name(), to.name()) == 0)
+            throw new BizException(ErrorCode.ORDER_STATUS_INVALID, "Concurrent modification");
+        logTransition(orderId, from.name(), to.name(), operatorId, remark);
     }
 
     @Override
@@ -206,20 +214,21 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Scheduled(fixedDelay = 60_000)
-    @Transactional
     public void closeExpiredOrders() {
         for (Order o : orderMapper.findExpiredOrders(50)) {
-            String lk = "order:" + o.getId();
-            if (!distributedLock.tryLock(lk, 5000)) continue;
+            DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + o.getId(), 5000);
+            if (handle == null) continue;
             try {
-                if (orderMapper.updateStatus(o.getId(), "CREATED", "CANCELLED") > 0) {
-                    orderMapper.updateCloseInfo(o.getId(), LocalDateTime.now(), "Payment timeout");
-                    logTransition(o.getId(), "CREATED", "CANCELLED", null, "Auto-close timeout");
-                    inventoryService.releaseStock(o.getSkuId(), o.getQuantity());
-                    log.info("Auto-closed: {}", o.getOrderNo());
-                }
+                transactionTemplate.executeWithoutResult(status -> {
+                    if (orderMapper.updateStatus(o.getId(), "CREATED", "CANCELLED") > 0) {
+                        orderMapper.updateCloseInfo(o.getId(), LocalDateTime.now(), "Payment timeout");
+                        logTransition(o.getId(), "CREATED", "CANCELLED", null, "Auto-close timeout");
+                        inventoryService.releaseStock(o.getSkuId(), o.getQuantity());
+                        log.info("Auto-closed: {}", o.getOrderNo());
+                    }
+                });
             } finally {
-                distributedLock.unlock(lk);
+                distributedLock.unlock(handle);
             }
         }
     }

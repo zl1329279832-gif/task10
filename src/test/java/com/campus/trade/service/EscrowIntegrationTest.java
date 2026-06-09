@@ -18,8 +18,11 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,6 +42,20 @@ class EscrowIntegrationTest {
     @Mock private AuditService auditService;
     @Mock private DistributedLock distributedLock;
     @Mock private TradeConfig tradeConfig;
+    @Mock private TransactionTemplate transactionTemplate;
+
+    @BeforeEach
+    void setupTransactionTemplate() {
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        lenient().doAnswer(invocation -> {
+            Consumer<?> consumer = invocation.getArgument(0);
+            consumer.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
+    }
 
     private Payment buildPayment(Long id, Long orderId, BigDecimal amount, String status) {
         Payment p = new Payment();
@@ -59,7 +76,7 @@ class EscrowIntegrationTest {
         @Test @DisplayName("Freeze SUCCESS payment and PENDING settlement") void freezeBoth() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.SUCCESS.name());
             Settlement stl = buildSettlement(1L, 100L, new BigDecimal("196.00"), SettlementStatus.PENDING.name());
-            when(distributedLock.tryLock("order:100")).thenReturn(true);
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(paymentMapper.freeze(1L, "SUCCESS", new BigDecimal("200.00"), "dispute")).thenReturn(1);
             when(settlementMapper.findByOrderId(100L)).thenReturn(stl);
@@ -75,7 +92,7 @@ class EscrowIntegrationTest {
 
         @Test @DisplayName("Freeze payment only (no settlement)") void freezePaymentOnly() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.SUCCESS.name());
-            when(distributedLock.tryLock("order:100")).thenReturn(true);
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(paymentMapper.freeze(1L, "SUCCESS", new BigDecimal("200.00"), "refund")).thenReturn(1);
             when(settlementMapper.findByOrderId(100L)).thenReturn(null);
@@ -88,7 +105,7 @@ class EscrowIntegrationTest {
 
         @Test @DisplayName("Skip freeze when payment not SUCCESS") void skipWhenNotSuccess() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.PENDING.name());
-            when(distributedLock.tryLock("order:100")).thenReturn(true);
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(settlementMapper.findByOrderId(100L)).thenReturn(null);
 
@@ -98,7 +115,7 @@ class EscrowIntegrationTest {
         }
 
         @Test @DisplayName("Throw when lock fails") void lockFail() {
-            when(distributedLock.tryLock("order:100")).thenReturn(false);
+            when(distributedLock.tryLock("order:100")).thenReturn(null);
             assertThatThrownBy(() -> escrowService.freezeFunds(100L, 1L, "test"))
                     .isInstanceOf(BizException.class);
         }
@@ -111,7 +128,7 @@ class EscrowIntegrationTest {
         @Test @DisplayName("Unfreeze FROZEN payment and settlement") void unfreezeBoth() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.FROZEN.name());
             Settlement stl = buildSettlement(1L, 100L, new BigDecimal("196.00"), SettlementStatus.FROZEN.name());
-            when(distributedLock.tryLock("order:100")).thenReturn(true);
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(paymentMapper.unfreeze(1L, "SUCCESS")).thenReturn(1);
             when(settlementMapper.findByOrderId(100L)).thenReturn(stl);
@@ -125,7 +142,7 @@ class EscrowIntegrationTest {
 
         @Test @DisplayName("Skip unfreeze when not frozen") void skipWhenNotFrozen() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.SUCCESS.name());
-            when(distributedLock.tryLock("order:100")).thenReturn(true);
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(settlementMapper.findByOrderId(100L)).thenReturn(null);
 
@@ -141,43 +158,47 @@ class EscrowIntegrationTest {
     @Nested @DisplayName("Auto-settle on receipt") class AutoSettle {
         @Test @DisplayName("Auto-settle SUCCESS payment") void autoSettleSuccess() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.SUCCESS.name());
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(settlementMapper.findByOrderId(100L)).thenReturn(null);
             SettlementResponse resp = new SettlementResponse();
             resp.setId(1L);
-            when(settlementService.createSettlement(100L)).thenReturn(resp);
+            when(settlementService.createSettlementInternal(100L)).thenReturn(resp);
 
             escrowService.autoSettleOnReceipt(100L, 2L);
 
-            verify(settlementService).createSettlement(100L);
-            verify(settlementService).executeSettlement(1L);
+            verify(settlementService).createSettlementInternal(100L);
+            verify(settlementService).executeSettlementInternal(1L);
         }
 
         @Test @DisplayName("Skip auto-settle when payment frozen") void skipWhenFrozen() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.FROZEN.name());
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
 
             escrowService.autoSettleOnReceipt(100L, 2L);
 
-            verify(settlementService, never()).createSettlement(anyLong());
+            verify(settlementService, never()).createSettlementInternal(anyLong());
         }
 
         @Test @DisplayName("Skip auto-settle when settlement exists") void skipWhenExists() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.SUCCESS.name());
             Settlement stl = buildSettlement(1L, 100L, new BigDecimal("196.00"), SettlementStatus.SETTLED.name());
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(settlementMapper.findByOrderId(100L)).thenReturn(stl);
 
             escrowService.autoSettleOnReceipt(100L, 2L);
 
-            verify(settlementService, never()).createSettlement(anyLong());
+            verify(settlementService, never()).createSettlementInternal(anyLong());
         }
 
         @Test @DisplayName("Non-fatal when auto-settle throws") void nonFatal() {
             Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"), PaymentStatus.SUCCESS.name());
+            when(distributedLock.tryLock("order:100")).thenReturn(new DistributedLock.LockHandle("order:100", "token"));
             when(paymentMapper.findByOrderId(100L)).thenReturn(pmt);
             when(settlementMapper.findByOrderId(100L)).thenReturn(null);
-            when(settlementService.createSettlement(100L)).thenThrow(new BizException(ErrorCode.SETTLEMENT_ALREADY_EXISTS));
+            when(settlementService.createSettlementInternal(100L)).thenThrow(new BizException(ErrorCode.SETTLEMENT_ALREADY_EXISTS));
 
             // Should not throw
             assertThatCode(() -> escrowService.autoSettleOnReceipt(100L, 2L)).doesNotThrowAnyException();
@@ -192,7 +213,7 @@ class EscrowIntegrationTest {
             Settlement stl = buildSettlement(1L, 100L, new BigDecimal("196.00"), SettlementStatus.FAILED.name());
             stl.setRetryCount(0);
             when(settlementMapper.findById(1L)).thenReturn(stl);
-            when(distributedLock.tryLock("settlement:1")).thenReturn(true);
+            when(distributedLock.tryLock("settlement:1")).thenReturn(new DistributedLock.LockHandle("settlement:1", "token"));
             when(settlementMapper.retryFailed(1L)).thenReturn(1);
             SettlementResponse resp = new SettlementResponse();
             resp.setId(1L); resp.setStatus("SETTLED");
@@ -201,13 +222,14 @@ class EscrowIntegrationTest {
             SettlementResponse result = escrowService.retrySettlement(1L, 1L);
 
             verify(settlementMapper).retryFailed(1L);
-            verify(settlementService).executeSettlement(1L);
+            verify(settlementService).executeSettlementInternal(1L);
             assertThat(result.getStatus()).isEqualTo("SETTLED");
         }
 
         @Test @DisplayName("Reject retry when not FAILED") void rejectWhenNotFailed() {
             Settlement stl = buildSettlement(1L, 100L, new BigDecimal("196.00"), SettlementStatus.PENDING.name());
             when(settlementMapper.findById(1L)).thenReturn(stl);
+            when(distributedLock.tryLock("settlement:1")).thenReturn(new DistributedLock.LockHandle("settlement:1", "token"));
 
             assertThatThrownBy(() -> escrowService.retrySettlement(1L, 1L))
                     .isInstanceOf(BizException.class);

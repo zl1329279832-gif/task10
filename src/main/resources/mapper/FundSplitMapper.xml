@@ -22,4 +22,8 @@
     <update id="updateStatus">UPDATE t_fund_split SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
     <update id="updateBuyerRefundNo">UPDATE t_fund_split SET buyer_refund_no=#{buyerRefundNo}, updated_at=NOW() WHERE id=#{id}</update>
     <update id="updateSellerSettlementNo">UPDATE t_fund_split SET seller_settlement_no=#{sellerSettlementNo}, updated_at=NOW() WHERE id=#{id}</update>
+    <select id="sumActiveSplitAmountsByOrderId" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(buyer_refund_amount + seller_settle_amount), 0)
+        FROM t_fund_split WHERE order_id = #{orderId} AND status = 'EXECUTED'
+    </select>
 </mapper>

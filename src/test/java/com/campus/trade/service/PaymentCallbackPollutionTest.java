@@ -10,13 +10,17 @@ import com.campus.trade.domain.enums.OrderStatus;
 import com.campus.trade.domain.enums.PaymentStatus;
 import com.campus.trade.mapper.OrderMapper;
 import com.campus.trade.mapper.PaymentMapper;
+import com.campus.trade.mapper.RefundMapper;
 import com.campus.trade.service.impl.PaymentServiceImpl;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,10 +43,25 @@ class PaymentCallbackPollutionTest {
     @Mock private AlipayConfig alipayConfig;
     @Mock private PaymentMapper paymentMapper;
     @Mock private OrderMapper orderMapper;
+    @Mock private RefundMapper refundMapper;
     @Mock private OrderService orderService;
     @Mock private InventoryService inventoryService;
     @Mock private AuditService auditService;
     @Mock private DistributedLock distributedLock;
+    @Mock private TransactionTemplate transactionTemplate;
+
+    @BeforeEach
+    void setupTransactionTemplate() {
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        lenient().doAnswer(invocation -> {
+            Consumer<?> consumer = invocation.getArgument(0);
+            consumer.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
+    }
 
     // ── builders ──
 
@@ -71,7 +90,8 @@ class PaymentCallbackPollutionTest {
                                boolean lockOk) {
         when(orderMapper.findByOrderNo(orderNo)).thenReturn(ord);
         when(paymentMapper.findByOrderNo(orderNo)).thenReturn(pmt);
-        when(distributedLock.tryLock("order:" + orderId)).thenReturn(lockOk);
+        when(distributedLock.tryLock("order:" + orderId)).thenReturn(
+                lockOk ? new DistributedLock.LockHandle("order:" + orderId, "token") : null);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -85,11 +105,14 @@ class PaymentCallbackPollutionTest {
             setupSimulate("ORD001", 100L, p, o, true);
             when(paymentMapper.findById(1L)).thenReturn(p);
             when(orderMapper.findById(100L)).thenReturn(o);
+            when(paymentMapper.updateStatus(1L, "PENDING", "SUCCESS")).thenReturn(1);
 
             paymentService.simulatePayNotify("ORD001", "T001");
 
-            verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
-            verify(paymentMapper, never()).updateTradeNo(anyLong(), anyString(), any());
+            // Bug 8 fix: auto-refund on CANCELLED — payment goes PENDING→SUCCESS, then refund, then SUCCESS→CLOSED
+            verify(paymentMapper).updateStatus(1L, "PENDING", "SUCCESS");
+            verify(refundMapper).insert(any());
+            verify(paymentMapper).updateStatus(1L, "SUCCESS", "CLOSED");
             verify(orderService, never()).transitionToPaidInternal(anyLong(), anyString());
             verify(inventoryService, never()).deductStock(anyLong(), anyInt());
         }
@@ -100,12 +123,14 @@ class PaymentCallbackPollutionTest {
             setupSimulate("ORD001", 100L, p, o, true);
             when(paymentMapper.findById(1L)).thenReturn(p);
             when(orderMapper.findById(100L)).thenReturn(o);
+            when(paymentMapper.updateStatus(1L, "PENDING", "SUCCESS")).thenReturn(1);
 
             paymentService.simulatePayNotify("ORD001", "T001");
 
+            // Bug 8 fix: audit event is now AUTO_REFUND_ON_CANCELLED
             verify(auditService).log(isNull(), isNull(), eq("PAYMENT"),
-                    eq("CALLBACK_REJECTED_ORDER_NOT_CREATED"), eq("ORDER"), eq(100L),
-                    contains("orderStatus=CANCELLED"));
+                    eq("AUTO_REFUND_ON_CANCELLED"), eq("ORDER"), eq(100L),
+                    contains("tradeNo=T001"));
         }
     }
 
@@ -346,9 +371,8 @@ class PaymentCallbackPollutionTest {
             paymentService.simulatePayNotify("ORD010", "T010");
 
             verify(paymentMapper, never()).updateStatus(1L, "PENDING", "SUCCESS");
-            verify(auditService).log(isNull(), isNull(), eq("PAYMENT"),
-                    eq("CALLBACK_REJECTED_ORDER_NOT_CREATED"), eq("ORDER"), eq(1000L),
-                    contains("orderStatus=NULL"));
+            // Bug fix: null order now just logs warn + returns, no audit event
+            verify(auditService, never()).log(any(), any(), anyString(), anyString(), anyString(), anyLong(), anyString());
         }
     }
 

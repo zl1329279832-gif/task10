@@ -16,7 +16,7 @@ import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 
@@ -36,9 +36,9 @@ public class ArbitrationServiceImpl implements ArbitrationService {
     private final AuditService auditService;
     private final DistributedLock distributedLock;
     private final TradeConfig tradeConfig;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional
     public Arbitration arbitrate(Long adminId, ArbitrationRequest req) {
         Dispute d = disputeMapper.findById(req.getDisputeId());
         if (d == null) throw new BizException(ErrorCode.DISPUTE_NOT_FOUND);
@@ -86,58 +86,60 @@ public class ArbitrationServiceImpl implements ArbitrationService {
             sellerSettleAmount = payment.getAmount();
         }
 
-        String lk = "arbitrate:" + d.getId();
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        // Acquire arbitrate lock, then run all DB ops in one transaction
+        DistributedLock.LockHandle handle = distributedLock.tryLock("arbitrate:" + d.getId());
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            Arbitration a = new Arbitration();
-            a.setArbitrationNo(BizNoGenerator.arbitrationNo());
-            a.setDisputeId(d.getId());
-            a.setOrderId(d.getOrderId());
-            a.setArbiterId(adminId);
-            a.setResult(req.getResult());
-            a.setDecision(req.getDecision());
-            a.setRefundAmount(buyerRefundAmount);
-            a.setSellerAmount(sellerSettleAmount);
-            arbitrationMapper.insert(a);
+            final BigDecimal bra = buyerRefundAmount;
+            final BigDecimal ssa = sellerSettleAmount;
+            return transactionTemplate.execute(status -> {
+                Arbitration a = new Arbitration();
+                a.setArbitrationNo(BizNoGenerator.arbitrationNo());
+                a.setDisputeId(d.getId());
+                a.setOrderId(d.getOrderId());
+                a.setArbiterId(adminId);
+                a.setResult(req.getResult());
+                a.setDecision(req.getDecision());
+                a.setRefundAmount(bra);
+                a.setSellerAmount(ssa);
+                arbitrationMapper.insert(a);
 
-            disputeMapper.updateStatus(d.getId(), "ARBITRATING", "RESOLVED");
+                disputeMapper.updateStatus(d.getId(), "ARBITRATING", "RESOLVED");
 
-            // Execute fund operations based on ruling
-            switch (rt) {
-                case BUYER_WIN -> {
-                    // Full refund to buyer, payment -> CLOSED
-                    fundSplitService.executeFundSplit(a.getId(), o.getId(), payment.getId(),
-                            buyerRefundAmount, sellerSettleAmount, adminId);
-                    orderService.transitionOrder(o.getId(), OrderStatus.REFUNDED.name(), adminId, "Arbitration: buyer wins");
+                // Use lock-free internal methods since caller holds arbitrate lock
+                switch (rt) {
+                    case BUYER_WIN -> {
+                        fundSplitService.executeFundSplitInternal(a.getId(), o.getId(), payment.getId(),
+                                bra, ssa, adminId);
+                        orderService.transitionOrderInternal(o.getId(), OrderStatus.REFUNDED.name(), adminId,
+                                "Arbitration: buyer wins");
+                    }
+                    case SELLER_WIN -> {
+                        escrowService.unfreezeFundsInternal(o.getId(), adminId, "Arbitration: seller wins");
+                        fundSplitService.executeFundSplitInternal(a.getId(), o.getId(), payment.getId(),
+                                bra, ssa, adminId);
+                        String ts = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
+                        orderService.transitionOrderInternal(o.getId(), ts, adminId, "Arbitration: seller wins");
+                    }
+                    case PARTIAL -> {
+                        fundSplitService.executeFundSplitInternal(a.getId(), o.getId(), payment.getId(),
+                                bra, ssa, adminId);
+                        String ts2 = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
+                        orderService.transitionOrderInternal(o.getId(), ts2, adminId,
+                                "Arbitration: partial refund=" + bra + ",sellerSettle=" + ssa);
+                    }
                 }
-                case SELLER_WIN -> {
-                    // Unfreeze payment, auto-settle to seller
-                    escrowService.unfreezeFunds(o.getId(), adminId, "Arbitration: seller wins");
-                    fundSplitService.executeFundSplit(a.getId(), o.getId(), payment.getId(),
-                            buyerRefundAmount, sellerSettleAmount, adminId);
-                    String ts = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
-                    orderService.transitionOrder(o.getId(), ts, adminId, "Arbitration: seller wins");
-                }
-                case PARTIAL -> {
-                    // Partial fund split
-                    fundSplitService.executeFundSplit(a.getId(), o.getId(), payment.getId(),
-                            buyerRefundAmount, sellerSettleAmount, adminId);
-                    String ts2 = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
-                    orderService.transitionOrder(o.getId(), ts2, adminId,
-                            "Arbitration: partial refund=" + buyerRefundAmount + ",sellerSettle=" + sellerSettleAmount);
-                }
-            }
 
-            auditService.log(adminId, null, "ARBITRATION", "DECIDE", "DISPUTE", d.getId(),
-                    "result=" + req.getResult() + ",buyerRefund=" + buyerRefundAmount + ",sellerSettle=" + sellerSettleAmount);
-            return a;
+                auditService.log(adminId, null, "ARBITRATION", "DECIDE", "DISPUTE", d.getId(),
+                        "result=" + req.getResult() + ",buyerRefund=" + bra + ",sellerSettle=" + ssa);
+                return a;
+            });
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 
     @Override
-    @Transactional
     public Arbitration reverseArbitration(Long adminId, ArbitrationRequest req) {
         Dispute d = disputeMapper.findById(req.getDisputeId());
         if (d == null) throw new BizException(ErrorCode.DISPUTE_NOT_FOUND);
@@ -175,57 +177,62 @@ public class ArbitrationServiceImpl implements ArbitrationService {
             sellerSettleAmount = payment.getAmount();
         }
 
-        String lk = "arbitrate:" + d.getId();
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("arbitrate:" + d.getId());
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            // Cancel old fund split
-            fundSplitService.cancelActiveSplit(existing.getId(), adminId);
+            final BigDecimal bra = buyerRefundAmount;
+            final BigDecimal ssa = sellerSettleAmount;
+            return transactionTemplate.execute(status -> {
+                // Cancel old fund split using lock-free internal
+                fundSplitService.cancelActiveSplitInternal(existing.getId(), adminId);
 
-            // Update arbitration ruling in place
-            arbitrationMapper.updateRuling(existing.getId(), req.getResult(), req.getDecision(),
-                    buyerRefundAmount, sellerSettleAmount);
+                // Update arbitration ruling in place
+                arbitrationMapper.updateRuling(existing.getId(), req.getResult(), req.getDecision(),
+                        bra, ssa);
 
-            // Re-open dispute for re-resolution
-            disputeMapper.updateStatus(d.getId(), "RESOLVED", "ARBITRATING");
+                // Re-open dispute for re-resolution
+                disputeMapper.updateStatus(d.getId(), "RESOLVED", "ARBITRATING");
 
-            // Execute new fund split
-            switch (rt) {
-                case BUYER_WIN -> {
-                    fundSplitService.executeFundSplit(existing.getId(), o.getId(), payment.getId(),
-                            buyerRefundAmount, sellerSettleAmount, adminId);
-                    // Transition order to REFUNDED if not already
-                    if (!OrderStatus.REFUNDED.name().equals(o.getStatus())) {
-                        orderService.transitionOrder(o.getId(), OrderStatus.REFUNDED.name(), adminId, "Arbitration reversal: buyer wins");
+                // Execute new fund split using lock-free internal methods
+                switch (rt) {
+                    case BUYER_WIN -> {
+                        fundSplitService.executeFundSplitInternal(existing.getId(), o.getId(), payment.getId(),
+                                bra, ssa, adminId);
+                        if (!OrderStatus.REFUNDED.name().equals(o.getStatus())) {
+                            orderService.transitionOrderInternal(o.getId(), OrderStatus.REFUNDED.name(), adminId,
+                                    "Arbitration reversal: buyer wins");
+                        }
+                    }
+                    case SELLER_WIN -> {
+                        escrowService.unfreezeFundsInternal(o.getId(), adminId, "Arbitration reversal: seller wins");
+                        fundSplitService.executeFundSplitInternal(existing.getId(), o.getId(), payment.getId(),
+                                bra, ssa, adminId);
+                        String ts = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
+                        if (!ts.equals(o.getStatus())) {
+                            orderService.transitionOrderInternal(o.getId(), ts, adminId,
+                                    "Arbitration reversal: seller wins");
+                        }
+                    }
+                    case PARTIAL -> {
+                        fundSplitService.executeFundSplitInternal(existing.getId(), o.getId(), payment.getId(),
+                                bra, ssa, adminId);
+                        String ts2 = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
+                        if (!ts2.equals(o.getStatus())) {
+                            orderService.transitionOrderInternal(o.getId(), ts2, adminId,
+                                    "Arbitration reversal: partial refund=" + bra);
+                        }
                     }
                 }
-                case SELLER_WIN -> {
-                    escrowService.unfreezeFunds(o.getId(), adminId, "Arbitration reversal: seller wins");
-                    fundSplitService.executeFundSplit(existing.getId(), o.getId(), payment.getId(),
-                            buyerRefundAmount, sellerSettleAmount, adminId);
-                    String ts = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
-                    if (!ts.equals(o.getStatus())) {
-                        orderService.transitionOrder(o.getId(), ts, adminId, "Arbitration reversal: seller wins");
-                    }
-                }
-                case PARTIAL -> {
-                    fundSplitService.executeFundSplit(existing.getId(), o.getId(), payment.getId(),
-                            buyerRefundAmount, sellerSettleAmount, adminId);
-                    String ts2 = o.getShipTime() != null ? OrderStatus.SHIPPED.name() : OrderStatus.PAID.name();
-                    if (!ts2.equals(o.getStatus())) {
-                        orderService.transitionOrder(o.getId(), ts2, adminId,
-                                "Arbitration reversal: partial refund=" + buyerRefundAmount);
-                    }
-                }
-            }
 
-            // Re-resolve dispute
-            disputeMapper.updateStatus(d.getId(), "ARBITRATING", "RESOLVED");
+                // Re-resolve dispute
+                disputeMapper.updateStatus(d.getId(), "ARBITRATING", "RESOLVED");
 
-            auditService.log(adminId, null, "ARBITRATION", "REVERSE", "DISPUTE", d.getId(),
-                    "newResult=" + req.getResult() + ",buyerRefund=" + buyerRefundAmount + ",sellerSettle=" + sellerSettleAmount);
-            return arbitrationMapper.findById(existing.getId());
+                auditService.log(adminId, null, "ARBITRATION", "REVERSE", "DISPUTE", d.getId(),
+                        "newResult=" + req.getResult() + ",buyerRefund=" + bra + ",sellerSettle=" + ssa);
+                return arbitrationMapper.findById(existing.getId());
+            });
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 

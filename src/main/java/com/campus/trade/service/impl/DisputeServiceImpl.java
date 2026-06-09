@@ -16,7 +16,7 @@ import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -33,55 +33,65 @@ public class DisputeServiceImpl implements DisputeService {
     private final AuditService auditService;
     private final DistributedLock distributedLock;
     private final EscrowService escrowService;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional
     public DisputeResponse createDispute(Long userId, DisputeRequest req) {
-        Order o = orderMapper.findById(req.getOrderId());
-        if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
-
-        boolean isBuyer = o.getBuyerId().equals(userId);
-        boolean isSeller = o.getSellerId().equals(userId);
-        if (!isBuyer && !isSeller) throw new BizException(ErrorCode.DISPUTE_NOT_PARTICIPANT);
-
-        String os = o.getStatus();
-        if (!OrderStatus.PAID.name().equals(os)
-                && !OrderStatus.SHIPPED.name().equals(os)
-                && !OrderStatus.RECEIVED.name().equals(os)
-                && !OrderStatus.REFUNDING.name().equals(os))
-            throw new BizException(ErrorCode.ORDER_STATUS_INVALID, os);
-
-        Dispute ex = disputeMapper.findByOrderId(o.getId());
-        if (ex != null
-                && !DisputeStatus.CLOSED.name().equals(ex.getStatus())
-                && !DisputeStatus.RESOLVED.name().equals(ex.getStatus()))
-            throw new BizException(ErrorCode.DISPUTE_ALREADY_EXISTS);
-
-        Dispute d = new Dispute();
-        d.setDisputeNo(BizNoGenerator.disputeNo());
-        d.setOrderId(o.getId());
-        d.setOrderNo(o.getOrderNo());
-        d.setInitiatorId(userId);
-        d.setRespondentId(isBuyer ? o.getSellerId() : o.getBuyerId());
-        d.setReason(req.getReason());
-        d.setEvidenceUrls(req.getEvidenceUrls());
-        d.setStatus(DisputeStatus.EVIDENCE.name());
-        disputeMapper.insert(d);
-
-        orderService.transitionOrder(o.getId(), OrderStatus.DISPUTED.name(), userId, "Dispute raised");
-
-        // Freeze escrow funds when dispute is initiated
+        // Use order lock to prevent race with concurrent operations
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + req.getOrderId());
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            escrowService.freezeFunds(o.getId(), userId, "Dispute raised: " + d.getDisputeNo());
-        } catch (Exception e) {
-            log.warn("Failed to freeze funds on dispute create, orderId={}: {}", o.getId(), e.getMessage());
-        }
+            return transactionTemplate.execute(status -> {
+                Order o = orderMapper.findById(req.getOrderId());
+                if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
 
-        return toResp(d);
+                boolean isBuyer = o.getBuyerId().equals(userId);
+                boolean isSeller = o.getSellerId().equals(userId);
+                if (!isBuyer && !isSeller) throw new BizException(ErrorCode.DISPUTE_NOT_PARTICIPANT);
+
+                String os = o.getStatus();
+                if (!OrderStatus.PAID.name().equals(os)
+                        && !OrderStatus.SHIPPED.name().equals(os)
+                        && !OrderStatus.RECEIVED.name().equals(os)
+                        && !OrderStatus.REFUNDING.name().equals(os))
+                    throw new BizException(ErrorCode.ORDER_STATUS_INVALID, os);
+
+                Dispute ex = disputeMapper.findByOrderId(o.getId());
+                if (ex != null
+                        && !DisputeStatus.CLOSED.name().equals(ex.getStatus())
+                        && !DisputeStatus.RESOLVED.name().equals(ex.getStatus()))
+                    throw new BizException(ErrorCode.DISPUTE_ALREADY_EXISTS);
+
+                Dispute d = new Dispute();
+                d.setDisputeNo(BizNoGenerator.disputeNo());
+                d.setOrderId(o.getId());
+                d.setOrderNo(o.getOrderNo());
+                d.setInitiatorId(userId);
+                d.setRespondentId(isBuyer ? o.getSellerId() : o.getBuyerId());
+                d.setReason(req.getReason());
+                d.setEvidenceUrls(req.getEvidenceUrls());
+                d.setStatus(DisputeStatus.EVIDENCE.name());
+                disputeMapper.insert(d);
+
+                // Use lock-free internal since caller holds order lock
+                orderService.transitionOrderInternal(o.getId(), OrderStatus.DISPUTED.name(), userId, "Dispute raised");
+
+                // Freeze escrow funds using lock-free internal since caller holds order lock
+                try {
+                    escrowService.freezeFundsInternal(o.getId(), userId, "Dispute raised: " + d.getDisputeNo());
+                } catch (Exception e) {
+                    log.warn("Failed to freeze funds on dispute create, orderId={}: {}", o.getId(), e.getMessage());
+                }
+
+                return toResp(d);
+            });
+        } finally {
+            distributedLock.unlock(handle);
+        }
     }
 
     @Override
-    @Transactional
+    @org.springframework.transaction.annotation.Transactional
     public void submitEvidence(Long userId, EvidenceRequest req) {
         Dispute d = disputeMapper.findById(req.getDisputeId());
         if (d == null) throw new BizException(ErrorCode.DISPUTE_NOT_FOUND);
@@ -100,18 +110,16 @@ public class DisputeServiceImpl implements DisputeService {
     }
 
     @Override
-    @Transactional
     public void escalateToArbitration(Long disputeId) {
-        Dispute d = disputeMapper.findById(disputeId);
-        if (d == null) throw new BizException(ErrorCode.DISPUTE_NOT_FOUND);
-
-        String lk = "dispute:" + disputeId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("dispute:" + disputeId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            if (disputeMapper.updateStatus(disputeId, "EVIDENCE", "ARBITRATING") == 0)
-                throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
+            transactionTemplate.executeWithoutResult(status -> {
+                if (disputeMapper.updateStatus(disputeId, "EVIDENCE", "ARBITRATING") == 0)
+                    throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
+            });
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 

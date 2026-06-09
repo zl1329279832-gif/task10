@@ -15,8 +15,11 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -36,6 +39,20 @@ class FundSplitIntegrationTest {
     @Mock private AuditService auditService;
     @Mock private DistributedLock distributedLock;
     @Mock private TradeConfig tradeConfig;
+    @Mock private TransactionTemplate transactionTemplate;
+
+    @BeforeEach
+    void setupTransactionTemplate() {
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
+        lenient().doAnswer(invocation -> {
+            Consumer<?> consumer = invocation.getArgument(0);
+            consumer.accept(null);
+            return null;
+        }).when(transactionTemplate).executeWithoutResult(any());
+    }
 
     private Payment buildPayment(Long id, Long orderId, BigDecimal amount) {
         Payment p = new Payment();
@@ -54,7 +71,7 @@ class FundSplitIntegrationTest {
     @Test @DisplayName("Execute partial split: buyer refund + seller settle") void partialSplit() {
         Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"));
         Order ord = buildOrder(100L, "ORD001", 10L, 20L);
-        when(distributedLock.tryLock("fundsplit:1")).thenReturn(true);
+        when(distributedLock.tryLock("fundsplit:1")).thenReturn(new DistributedLock.LockHandle("fundsplit:1", "token"));
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(null);
         when(paymentMapper.findById(1L)).thenReturn(pmt);
         when(tradeConfig.getPlatformFeeRate()).thenReturn(new BigDecimal("0.02"));
@@ -64,6 +81,7 @@ class FundSplitIntegrationTest {
         when(fundSplitMapper.insert(any())).thenAnswer(inv -> { FundSplit fs = inv.getArgument(0); fs.setId(1L); return 1; });
         when(paymentMapper.unfreeze(1L, "SUCCESS")).thenReturn(1);
         when(fundSplitMapper.updateStatus(1L, "PENDING", "EXECUTED")).thenReturn(1);
+        when(fundSplitMapper.sumActiveSplitAmountsByOrderId(100L)).thenReturn(new BigDecimal("200.00"));
         FundSplit executed = new FundSplit(); executed.setId(1L); executed.setStatus("EXECUTED");
         when(fundSplitMapper.findById(1L)).thenReturn(executed);
 
@@ -79,7 +97,7 @@ class FundSplitIntegrationTest {
     @Test @DisplayName("Execute BUYER_WIN: full refund, payment CLOSED") void buyerWinFullRefund() {
         Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"));
         Order ord = buildOrder(100L, "ORD001", 10L, 20L);
-        when(distributedLock.tryLock("fundsplit:1")).thenReturn(true);
+        when(distributedLock.tryLock("fundsplit:1")).thenReturn(new DistributedLock.LockHandle("fundsplit:1", "token"));
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(null);
         when(paymentMapper.findById(1L)).thenReturn(pmt);
         when(tradeConfig.getPlatformFeeRate()).thenReturn(new BigDecimal("0.02"));
@@ -88,6 +106,7 @@ class FundSplitIntegrationTest {
         when(fundSplitMapper.insert(any())).thenAnswer(inv -> { FundSplit fs = inv.getArgument(0); fs.setId(1L); return 1; });
         when(paymentMapper.unfreeze(1L, "CLOSED")).thenReturn(1);
         when(fundSplitMapper.updateStatus(1L, "PENDING", "EXECUTED")).thenReturn(1);
+        when(fundSplitMapper.sumActiveSplitAmountsByOrderId(100L)).thenReturn(new BigDecimal("200.00"));
         FundSplit executed = new FundSplit(); executed.setId(1L); executed.setStatus("EXECUTED");
         when(fundSplitMapper.findById(1L)).thenReturn(executed);
 
@@ -102,7 +121,7 @@ class FundSplitIntegrationTest {
     @Test @DisplayName("Execute SELLER_WIN: full settle, no refund") void sellerWinFullSettle() {
         Payment pmt = buildPayment(1L, 100L, new BigDecimal("200.00"));
         Order ord = buildOrder(100L, "ORD001", 10L, 20L);
-        when(distributedLock.tryLock("fundsplit:1")).thenReturn(true);
+        when(distributedLock.tryLock("fundsplit:1")).thenReturn(new DistributedLock.LockHandle("fundsplit:1", "token"));
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(null);
         when(paymentMapper.findById(1L)).thenReturn(pmt);
         when(tradeConfig.getPlatformFeeRate()).thenReturn(new BigDecimal("0.02"));
@@ -111,6 +130,7 @@ class FundSplitIntegrationTest {
         when(fundSplitMapper.insert(any())).thenAnswer(inv -> { FundSplit fs = inv.getArgument(0); fs.setId(1L); return 1; });
         when(paymentMapper.unfreeze(1L, "SUCCESS")).thenReturn(1);
         when(fundSplitMapper.updateStatus(1L, "PENDING", "EXECUTED")).thenReturn(1);
+        when(fundSplitMapper.sumActiveSplitAmountsByOrderId(100L)).thenReturn(new BigDecimal("200.00"));
         FundSplit executed = new FundSplit(); executed.setId(1L); executed.setStatus("EXECUTED");
         when(fundSplitMapper.findById(1L)).thenReturn(executed);
 
@@ -125,7 +145,7 @@ class FundSplitIntegrationTest {
     @Test @DisplayName("Idempotent: repeat call returns existing EXECUTED split") void idempotent() {
         FundSplit existing = new FundSplit();
         existing.setId(1L); existing.setStatus(FundSplitStatus.EXECUTED.name());
-        when(distributedLock.tryLock("fundsplit:1")).thenReturn(true);
+        when(distributedLock.tryLock("fundsplit:1")).thenReturn(new DistributedLock.LockHandle("fundsplit:1", "token"));
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(existing);
 
         FundSplit result = fundSplitService.executeFundSplit(1L, 100L, 1L,
@@ -138,6 +158,7 @@ class FundSplitIntegrationTest {
     @Test @DisplayName("Cancel active split for arbitration reversal") void cancelActiveSplit() {
         FundSplit active = new FundSplit();
         active.setId(1L); active.setStatus(FundSplitStatus.EXECUTED.name());
+        when(distributedLock.tryLock("fundsplit:1")).thenReturn(new DistributedLock.LockHandle("fundsplit:1", "token"));
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(active);
         when(fundSplitMapper.updateStatus(1L, "EXECUTED", "CANCELLED")).thenReturn(1);
 
@@ -148,6 +169,7 @@ class FundSplitIntegrationTest {
     }
 
     @Test @DisplayName("Cancel no-op when no active split") void cancelNoOp() {
+        when(distributedLock.tryLock("fundsplit:1")).thenReturn(new DistributedLock.LockHandle("fundsplit:1", "token"));
         when(fundSplitMapper.findActiveByArbitrationId(1L)).thenReturn(null);
 
         fundSplitService.cancelActiveSplit(1L, 99L);

@@ -37,6 +37,8 @@ public enum ErrorCode {
     FUND_SPLIT_ALREADY_EXISTS(8011,"Active fund split already exists"),
     FUND_SPLIT_INVALID(8012,"Invalid fund split amounts"),
     FUND_SPLIT_EXECUTE_FAILED(8013,"Fund split execution failed"),
+    FUND_CONSERVATION_VIOLATED(8014,"Fund conservation check failed: amounts do not balance"),
+    PAYMENT_ORDER_MISMATCH(4010,"Payment succeeded but order is no longer active; auto-refund initiated"),
     IDEMPOTENT_DUPLICATE(9001,"Duplicate request"), IDEMPOTENT_PROCESSING(9002,"Request is being processed");
     private final int code; private final String message;
     ErrorCode(int code, String message) { this.code = code; this.message = message; }

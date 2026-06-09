@@ -12,6 +12,7 @@ import com.campus.trade.domain.enums.SettlementStatus;
 import com.campus.trade.dto.response.SettlementResponse;
 import com.campus.trade.common.result.PageResult;
 import com.campus.trade.common.util.BizNoGenerator;
+import com.campus.trade.common.util.DistributedLock;
 import com.campus.trade.mapper.OrderMapper;
 import com.campus.trade.mapper.PaymentMapper;
 import com.campus.trade.mapper.SettlementMapper;
@@ -19,7 +20,7 @@ import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -37,10 +38,22 @@ public class SettlementServiceImpl implements SettlementService {
     private final OrderService orderService;
     private final AuditService auditService;
     private final TradeConfig tradeConfig;
+    private final DistributedLock distributedLock;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional
     public SettlementResponse createSettlement(Long orderId) {
+        DistributedLock.LockHandle handle = distributedLock.tryLock("settlement:create:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            return transactionTemplate.execute(status -> createSettlementInternal(orderId));
+        } finally {
+            distributedLock.unlock(handle);
+        }
+    }
+
+    @Override
+    public SettlementResponse createSettlementInternal(Long orderId) {
         Order o = orderMapper.findById(orderId);
         if (o == null) throw new BizException(ErrorCode.ORDER_NOT_FOUND);
         if (!OrderStatus.RECEIVED.name().equals(o.getStatus()))
@@ -75,8 +88,18 @@ public class SettlementServiceImpl implements SettlementService {
     }
 
     @Override
-    @Transactional
     public void executeSettlement(Long id) {
+        DistributedLock.LockHandle handle = distributedLock.tryLock("settlement:" + id);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            transactionTemplate.executeWithoutResult(status -> executeSettlementInternal(id));
+        } finally {
+            distributedLock.unlock(handle);
+        }
+    }
+
+    @Override
+    public void executeSettlementInternal(Long id) {
         Settlement s = settlementMapper.findById(id);
         if (s == null) throw new BizException(404, "Not found");
 
@@ -92,20 +115,28 @@ public class SettlementServiceImpl implements SettlementService {
         if (settlementMapper.updateStatus(id, "PENDING", "SETTLED") == 0)
             throw new BizException(ErrorCode.ORDER_STATUS_INVALID);
         settlementMapper.updateSettledAt(id, LocalDateTime.now());
-        orderService.transitionOrder(s.getOrderId(), OrderStatus.SETTLED.name(), null, "Settlement completed");
+        // Use lock-free internal to avoid re-entrant lock on order
+        orderService.transitionOrderInternal(s.getOrderId(), OrderStatus.SETTLED.name(), null, "Settlement completed");
     }
 
     @Override
-    @Transactional
     public SettlementResponse retrySettlement(Long id) {
-        Settlement s = settlementMapper.findById(id);
-        if (s == null) throw new BizException(404, "Not found");
-        if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
-            throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
-        if (settlementMapper.retryFailed(id) == 0)
-            throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
-        executeSettlement(id);
-        return getSettlement(id);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("settlement:" + id);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            return transactionTemplate.execute(status -> {
+                Settlement s = settlementMapper.findById(id);
+                if (s == null) throw new BizException(404, "Not found");
+                if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
+                    throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
+                if (settlementMapper.retryFailed(id) == 0)
+                    throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
+                executeSettlementInternal(id);
+                return getSettlement(id);
+            });
+        } finally {
+            distributedLock.unlock(handle);
+        }
     }
 
     @Override

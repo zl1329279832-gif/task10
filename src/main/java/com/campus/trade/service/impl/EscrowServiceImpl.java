@@ -1,5 +1,6 @@
 package com.campus.trade.service.impl;
 
+import com.campus.trade.common.annotation.Idempotent;
 import com.campus.trade.common.config.TradeConfig;
 import com.campus.trade.common.exception.BizException;
 import com.campus.trade.common.exception.ErrorCode;
@@ -23,7 +24,7 @@ import com.campus.trade.service.SettlementService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -41,74 +42,93 @@ public class EscrowServiceImpl implements EscrowService {
     private final AuditService auditService;
     private final DistributedLock distributedLock;
     private final TradeConfig tradeConfig;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional
     public void freezeFunds(Long orderId, Long operatorId, String reason) {
-        String lk = "order:" + orderId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            // Freeze payment if SUCCESS
-            Payment payment = paymentMapper.findByOrderId(orderId);
-            if (payment != null && PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
-                PaymentStatus from = PaymentStatus.SUCCESS;
-                PaymentStatus to = PaymentStatus.FROZEN;
-                if (!PaymentStateTransition.isValid(from, to))
-                    throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED);
-                if (paymentMapper.freeze(payment.getId(), from.name(), payment.getAmount(), reason) == 0)
-                    throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED);
-                auditService.log(operatorId, null, "ESCROW", "FREEZE_PAYMENT", "PAYMENT", payment.getId(),
-                        "reason=" + reason + ",amount=" + payment.getAmount());
-            }
-
-            // Freeze settlement if PENDING
-            Settlement settlement = settlementMapper.findByOrderId(orderId);
-            if (settlement != null && SettlementStatus.PENDING.name().equals(settlement.getStatus())) {
-                SettlementStatus from = SettlementStatus.PENDING;
-                SettlementStatus to = SettlementStatus.FROZEN;
-                if (!SettlementStateTransition.isValid(from, to))
-                    throw new BizException(ErrorCode.SETTLEMENT_FREEZE_FAILED);
-                if (settlementMapper.freeze(settlement.getId(), from.name(), settlement.getSettleAmount(), reason) == 0)
-                    throw new BizException(ErrorCode.SETTLEMENT_FREEZE_FAILED);
-                auditService.log(operatorId, null, "ESCROW", "FREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
-                        "reason=" + reason + ",amount=" + settlement.getSettleAmount());
-            }
+            transactionTemplate.executeWithoutResult(status -> freezeFundsInternal(orderId, operatorId, reason));
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 
     @Override
-    @Transactional
+    public void freezeFundsInternal(Long orderId, Long operatorId, String reason) {
+        // Freeze payment if SUCCESS
+        Payment payment = paymentMapper.findByOrderId(orderId);
+        if (payment != null && PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
+            PaymentStatus from = PaymentStatus.SUCCESS;
+            PaymentStatus to = PaymentStatus.FROZEN;
+            if (!PaymentStateTransition.isValid(from, to))
+                throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED);
+            if (paymentMapper.freeze(payment.getId(), from.name(), payment.getAmount(), reason) == 0)
+                throw new BizException(ErrorCode.PAYMENT_FREEZE_FAILED);
+            auditService.log(operatorId, null, "ESCROW", "FREEZE_PAYMENT", "PAYMENT", payment.getId(),
+                    "reason=" + reason + ",amount=" + payment.getAmount());
+        }
+
+        // Freeze settlement if PENDING
+        Settlement settlement = settlementMapper.findByOrderId(orderId);
+        if (settlement != null && SettlementStatus.PENDING.name().equals(settlement.getStatus())) {
+            SettlementStatus from = SettlementStatus.PENDING;
+            SettlementStatus to = SettlementStatus.FROZEN;
+            if (!SettlementStateTransition.isValid(from, to))
+                throw new BizException(ErrorCode.SETTLEMENT_FREEZE_FAILED);
+            if (settlementMapper.freeze(settlement.getId(), from.name(), settlement.getSettleAmount(), reason) == 0)
+                throw new BizException(ErrorCode.SETTLEMENT_FREEZE_FAILED);
+            auditService.log(operatorId, null, "ESCROW", "FREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
+                    "reason=" + reason + ",amount=" + settlement.getSettleAmount());
+        }
+    }
+
+    @Override
     public void unfreezeFunds(Long orderId, Long operatorId, String reason) {
-        String lk = "order:" + orderId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            // Unfreeze payment if FROZEN
-            Payment payment = paymentMapper.findByOrderId(orderId);
-            if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
-                if (paymentMapper.unfreeze(payment.getId(), PaymentStatus.SUCCESS.name()) == 0)
-                    throw new BizException(ErrorCode.PAYMENT_UNFREEZE_FAILED);
-                auditService.log(operatorId, null, "ESCROW", "UNFREEZE_PAYMENT", "PAYMENT", payment.getId(),
-                        "reason=" + reason);
-            }
-
-            // Unfreeze settlement if FROZEN
-            Settlement settlement = settlementMapper.findByOrderId(orderId);
-            if (settlement != null && SettlementStatus.FROZEN.name().equals(settlement.getStatus())) {
-                if (settlementMapper.unfreeze(settlement.getId(), SettlementStatus.PENDING.name()) == 0)
-                    throw new BizException(ErrorCode.SETTLEMENT_NOT_FROZEN);
-                auditService.log(operatorId, null, "ESCROW", "UNFREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
-                        "reason=" + reason);
-            }
+            transactionTemplate.executeWithoutResult(status -> unfreezeFundsInternal(orderId, operatorId, reason));
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 
     @Override
-    @Transactional
+    public void unfreezeFundsInternal(Long orderId, Long operatorId, String reason) {
+        // Unfreeze payment if FROZEN
+        Payment payment = paymentMapper.findByOrderId(orderId);
+        if (payment != null && PaymentStatus.FROZEN.name().equals(payment.getStatus())) {
+            if (paymentMapper.unfreeze(payment.getId(), PaymentStatus.SUCCESS.name()) == 0)
+                throw new BizException(ErrorCode.PAYMENT_UNFREEZE_FAILED);
+            auditService.log(operatorId, null, "ESCROW", "UNFREEZE_PAYMENT", "PAYMENT", payment.getId(),
+                    "reason=" + reason);
+        }
+
+        // Unfreeze settlement if FROZEN
+        Settlement settlement = settlementMapper.findByOrderId(orderId);
+        if (settlement != null && SettlementStatus.FROZEN.name().equals(settlement.getStatus())) {
+            if (settlementMapper.unfreeze(settlement.getId(), SettlementStatus.PENDING.name()) == 0)
+                throw new BizException(ErrorCode.SETTLEMENT_NOT_FROZEN);
+            auditService.log(operatorId, null, "ESCROW", "UNFREEZE_SETTLEMENT", "SETTLEMENT", settlement.getId(),
+                    "reason=" + reason);
+        }
+    }
+
+    @Override
     public void autoSettleOnReceipt(Long orderId, Long buyerId) {
+        DistributedLock.LockHandle handle = distributedLock.tryLock("order:" + orderId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        try {
+            transactionTemplate.executeWithoutResult(status -> autoSettleOnReceiptInternal(orderId, buyerId));
+        } finally {
+            distributedLock.unlock(handle);
+        }
+    }
+
+    @Override
+    public void autoSettleOnReceiptInternal(Long orderId, Long buyerId) {
         Payment payment = paymentMapper.findByOrderId(orderId);
         if (payment == null) {
             log.warn("No payment found for auto-settle, orderId={}", orderId);
@@ -131,10 +151,10 @@ public class EscrowServiceImpl implements EscrowService {
             return;
         }
 
-        // Create and execute settlement
+        // Create and execute settlement using lock-free internals (caller holds order lock)
         try {
-            SettlementResponse resp = settlementService.createSettlement(orderId);
-            settlementService.executeSettlement(resp.getId());
+            SettlementResponse resp = settlementService.createSettlementInternal(orderId);
+            settlementService.executeSettlementInternal(resp.getId());
             auditService.log(buyerId, null, "ESCROW", "AUTO_SETTLE", "ORDER", orderId,
                     "settlementId=" + resp.getId());
             log.info("Auto-settle completed for orderId={}", orderId);
@@ -147,25 +167,26 @@ public class EscrowServiceImpl implements EscrowService {
     }
 
     @Override
-    @Transactional
+    @Idempotent(key = "#settlementId.toString()", bizType = "SETTLEMENT_RETRY")
     public SettlementResponse retrySettlement(Long settlementId, Long operatorId) {
-        Settlement s = settlementMapper.findById(settlementId);
-        if (s == null) throw new BizException(404, "Settlement not found");
-        if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
-            throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
-
-        String lk = "settlement:" + settlementId;
-        if (!distributedLock.tryLock(lk)) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
+        DistributedLock.LockHandle handle = distributedLock.tryLock("settlement:" + settlementId);
+        if (handle == null) throw new BizException(ErrorCode.ORDER_LOCK_FAILED);
         try {
-            if (settlementMapper.retryFailed(settlementId) == 0)
-                throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
-            auditService.log(operatorId, null, "ESCROW", "RETRY_SETTLEMENT", "SETTLEMENT", settlementId,
-                    "retryCount=" + (s.getRetryCount() + 1));
-            // Re-execute
-            settlementService.executeSettlement(settlementId);
-            return settlementService.getSettlement(settlementId);
+            return transactionTemplate.execute(status -> {
+                Settlement s = settlementMapper.findById(settlementId);
+                if (s == null) throw new BizException(404, "Settlement not found");
+                if (!SettlementStatus.FAILED.name().equals(s.getStatus()))
+                    throw new BizException(ErrorCode.SETTLEMENT_NOT_FAILED);
+                if (settlementMapper.retryFailed(settlementId) == 0)
+                    throw new BizException(ErrorCode.SETTLEMENT_RETRY_FAILED);
+                auditService.log(operatorId, null, "ESCROW", "RETRY_SETTLEMENT", "SETTLEMENT", settlementId,
+                        "retryCount=" + (s.getRetryCount() + 1));
+                // Re-execute using lock-free internal
+                settlementService.executeSettlementInternal(settlementId);
+                return settlementService.getSettlement(settlementId);
+            });
         } finally {
-            distributedLock.unlock(lk);
+            distributedLock.unlock(handle);
         }
     }
 }
