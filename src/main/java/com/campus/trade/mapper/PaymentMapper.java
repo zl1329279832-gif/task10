@@ -8,6 +8,7 @@ public interface PaymentMapper {
     Payment findByPaymentNo(@Param("paymentNo") String paymentNo);
     Payment findByOrderNo(@Param("orderNo") String orderNo);
     Payment findByOrderId(@Param("orderId") Long orderId);
+    Payment findByTradeNo(@Param("tradeNo") String tradeNo);
     int insert(Payment payment);
     int updateStatus(@Param("id") Long id, @Param("fromStatus") String fromStatus, @Param("toStatus") String toStatus);
     int updateTradeNo(@Param("id") Long id, @Param("tradeNo") String tradeNo, @Param("paidAt") java.time.LocalDateTime paidAt);

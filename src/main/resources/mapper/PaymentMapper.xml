@@ -11,6 +11,7 @@
     <select id="findByPaymentNo" resultMap="BaseResult">SELECT * FROM t_payment WHERE payment_no=#{paymentNo}</select>
     <select id="findByOrderNo" resultMap="BaseResult">SELECT * FROM t_payment WHERE order_no=#{orderNo} ORDER BY created_at DESC LIMIT 1</select>
     <select id="findByOrderId" resultMap="BaseResult">SELECT * FROM t_payment WHERE order_id=#{orderId} ORDER BY created_at DESC LIMIT 1</select>
+    <select id="findByTradeNo" resultMap="BaseResult">SELECT * FROM t_payment WHERE trade_no=#{tradeNo} LIMIT 1</select>
     <insert id="insert" useGeneratedKeys="true" keyProperty="id">INSERT INTO t_payment (payment_no,order_id,order_no,amount,pay_channel,status) VALUES (#{paymentNo},#{orderId},#{orderNo},#{amount},#{payChannel},#{status})</insert>
     <update id="updateStatus">UPDATE t_payment SET status=#{toStatus}, updated_at=NOW() WHERE id=#{id} AND status=#{fromStatus}</update>
     <update id="updateTradeNo">UPDATE t_payment SET trade_no=#{tradeNo}, paid_at=#{paidAt}, updated_at=NOW() WHERE id=#{id}</update>

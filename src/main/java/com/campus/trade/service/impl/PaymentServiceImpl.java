@@ -7,13 +7,16 @@ import com.alipay.api.request.AlipayTradePagePayRequest;
 import com.campus.trade.common.config.AlipayConfig;
 import com.campus.trade.common.exception.BizException;
 import com.campus.trade.common.exception.ErrorCode;
+import com.campus.trade.common.util.DistributedLock;
 import com.campus.trade.domain.entity.Order;
+import com.campus.trade.domain.entity.OrderStatusLog;
 import com.campus.trade.domain.entity.Payment;
 import com.campus.trade.domain.enums.OrderStatus;
 import com.campus.trade.domain.enums.PaymentStatus;
 import com.campus.trade.dto.response.PaymentResponse;
 import com.campus.trade.common.util.BizNoGenerator;
 import com.campus.trade.mapper.OrderMapper;
+import com.campus.trade.mapper.OrderStatusLogMapper;
 import com.campus.trade.mapper.PaymentMapper;
 import com.campus.trade.service.*;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +38,8 @@ public class PaymentServiceImpl implements PaymentService {
     private final OrderService orderService;
     private final InventoryService inventoryService;
     private final AuditService auditService;
+    private final DistributedLock distributedLock;
+    private final OrderStatusLogMapper orderStatusLogMapper;
 
     @Override
     @Transactional
@@ -103,25 +108,43 @@ public class PaymentServiceImpl implements PaymentService {
             return "failure";
         }
 
-        paymentMapper.incrementNotifyCount(payment.getId());
-        paymentMapper.updateCallbackContent(payment.getId(), params.toString());
+        // Distributed lock to serialize concurrent callbacks for the same payment
+        String callbackLockKey = "pay-callback:" + payment.getPaymentNo();
+        if (!distributedLock.tryLock(callbackLockKey)) {
+            log.warn("Concurrent callback contention: {}", outTradeNo);
+            return "failure";
+        }
+        try {
+            // Reload payment inside lock to get latest state
+            payment = paymentMapper.findByPaymentNo(outTradeNo);
 
-        if (PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
-            log.info("Dup callback: {}", outTradeNo);
-            return "success";
-        }
-        if (PaymentStatus.CLOSED.name().equals(payment.getStatus())) {
-            log.warn("Callback for CLOSED: {}", outTradeNo);
-            return "success";
-        }
+            paymentMapper.incrementNotifyCount(payment.getId());
+            paymentMapper.updateCallbackContent(payment.getId(), params.toString());
 
-        if ("TRADE_SUCCESS".equals(tradeStatus) || "TRADE_FINISHED".equals(tradeStatus))
-            return processSuccess(payment, tradeNo, totalAmount);
-        if ("TRADE_CLOSED".equals(tradeStatus)) {
-            paymentMapper.updateStatus(payment.getId(), "PENDING", "CLOSED");
+            if (PaymentStatus.SUCCESS.name().equals(payment.getStatus())) {
+                log.info("Dup callback (already SUCCESS): {}", outTradeNo);
+                auditService.log("PAYMENT", "CALLBACK_DUP_SUCCESS", "PAYMENT", payment.getId(),
+                        "tradeStatus=" + tradeStatus + ",tradeNo=" + tradeNo);
+                return "success";
+            }
+            if (PaymentStatus.CLOSED.name().equals(payment.getStatus())) {
+                log.warn("Callback for CLOSED payment: {}", outTradeNo);
+                auditService.log("PAYMENT", "CALLBACK_AFTER_CLOSE", "PAYMENT", payment.getId(),
+                        "tradeStatus=" + tradeStatus + ",tradeNo=" + tradeNo);
+                return "success";
+            }
+
+            if ("TRADE_SUCCESS".equals(tradeStatus) || "TRADE_FINISHED".equals(tradeStatus)) {
+                return processSuccess(payment, tradeNo, totalAmount);
+            }
+            if ("TRADE_CLOSED".equals(tradeStatus)) {
+                paymentMapper.updateStatus(payment.getId(), "PENDING", "CLOSED");
+                return "success";
+            }
             return "success";
+        } finally {
+            distributedLock.unlock(callbackLockKey);
         }
-        return "success";
     }
 
     @Override
@@ -137,30 +160,93 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     private String processSuccess(Payment payment, String tradeNo, String totalAmount) {
+        // 1. Amount mismatch -> reject, audit only
         if (!payment.getAmount().toPlainString().equals(totalAmount)) {
-            log.error("Amount mismatch: expected={},actual={}", payment.getAmount(), totalAmount);
+            log.error("Amount mismatch: expected={},actual={},paymentNo={}",
+                    payment.getAmount(), totalAmount, payment.getPaymentNo());
             auditService.log(null, null, "PAYMENT", "AMOUNT_MISMATCH", "PAYMENT", payment.getId(),
-                    "expected=" + payment.getAmount() + ",actual=" + totalAmount);
-        }
-        if (paymentMapper.updateStatus(payment.getId(), "PENDING", "SUCCESS") == 0) {
-            log.info("Already processed: {}", payment.getPaymentNo());
+                    "expected=" + payment.getAmount() + ",actual=" + totalAmount + ",tradeNo=" + tradeNo);
             return "success";
         }
 
-        LocalDateTime now = LocalDateTime.now();
-        paymentMapper.updateTradeNo(payment.getId(), tradeNo, now);
-
-        Order order = orderMapper.findById(payment.getOrderId());
-        if (order == null || !OrderStatus.CREATED.name().equals(order.getStatus())) {
-            log.warn("Order not in CREATED when callback: {}", order != null ? order.getStatus() : "null");
-            return "success";
+        // 2. trade_no duplicate check
+        if (tradeNo != null) {
+            Payment existingByTradeNo = paymentMapper.findByTradeNo(tradeNo);
+            if (existingByTradeNo != null && !existingByTradeNo.getId().equals(payment.getId())) {
+                log.error("Duplicate tradeNo: {} already used by payment {}",
+                        tradeNo, existingByTradeNo.getPaymentNo());
+                auditService.log(null, null, "PAYMENT", "TRADE_NO_DUPLICATE", "PAYMENT", payment.getId(),
+                        "tradeNo=" + tradeNo + ",existingPaymentId=" + existingByTradeNo.getId());
+                return "success";
+            }
         }
 
-        orderService.transitionOrder(order.getId(), OrderStatus.PAID.name(), null, "Payment received");
-        orderMapper.updatePayInfo(order.getId(), now);
-        inventoryService.deductStock(order.getSkuId(), order.getQuantity());
-        auditService.log(null, null, "PAYMENT", "SUCCESS", "ORDER", order.getId(), "tradeNo=" + tradeNo);
-        log.info("Payment success: orderNo={}, tradeNo={}", order.getOrderNo(), tradeNo);
+        // 3. Acquire order lock to prevent TOCTOU between status check and CAS update
+        String orderLockKey = "order:" + payment.getOrderId();
+        if (!distributedLock.tryLock(orderLockKey)) {
+            log.warn("Order lock contention during payment callback: paymentNo={}", payment.getPaymentNo());
+            return "failure";
+        }
+        try {
+            // 4. Check order status inside lock
+            Order order = orderMapper.findById(payment.getOrderId());
+            if (order == null) {
+                auditService.log(null, null, "PAYMENT", "CALLBACK_REJECTED_ORDER_NULL", "PAYMENT", payment.getId(),
+                        "orderId=" + payment.getOrderId() + ",tradeNo=" + tradeNo);
+                return "success";
+            }
+
+            String orderStatus = order.getStatus();
+            if (!OrderStatus.CREATED.name().equals(orderStatus)) {
+                // Order not in payable state -> audit only, do NOT advance payment
+                auditService.log(null, null, "PAYMENT", "CALLBACK_REJECTED", "ORDER", order.getId(),
+                        "orderStatus=" + orderStatus + ",tradeNo=" + tradeNo + ",paymentNo=" + payment.getPaymentNo());
+                log.warn("Callback rejected: order {} in status {}, paymentNo={}",
+                        order.getOrderNo(), orderStatus, payment.getPaymentNo());
+                return "success";
+            }
+
+            // 5. CAS order CREATED -> PAID first (order before payment to prevent pollution)
+            if (orderMapper.updateStatus(order.getId(), OrderStatus.CREATED.name(), OrderStatus.PAID.name()) == 0) {
+                auditService.log(null, null, "PAYMENT", "CALLBACK_REJECTED_CONCURRENT", "ORDER", order.getId(),
+                        "tradeNo=" + tradeNo + ",paymentNo=" + payment.getPaymentNo());
+                log.warn("Order CAS failed (concurrent modification): orderId={}", order.getId());
+                return "success";
+            }
+
+            // 6. CAS payment PENDING -> SUCCESS
+            if (paymentMapper.updateStatus(payment.getId(), PaymentStatus.PENDING.name(), PaymentStatus.SUCCESS.name()) == 0) {
+                // Payment already processed (should not happen with callback lock, but CAS as safety net)
+                log.warn("Payment CAS failed after order transition: paymentNo={}", payment.getPaymentNo());
+                auditService.log(null, null, "PAYMENT", "PAYMENT_CAS_AFTER_ORDER", "PAYMENT", payment.getId(),
+                        "tradeNo=" + tradeNo);
+                return "success";
+            }
+
+            // 7. Update trade number and timestamps
+            LocalDateTime now = LocalDateTime.now();
+            paymentMapper.updateTradeNo(payment.getId(), tradeNo, now);
+            orderMapper.updatePayInfo(order.getId(), now);
+
+            // 8. Log order state transition
+            OrderStatusLog statusLog = new OrderStatusLog();
+            statusLog.setOrderId(order.getId());
+            statusLog.setFromStatus(OrderStatus.CREATED.name());
+            statusLog.setToStatus(OrderStatus.PAID.name());
+            statusLog.setOperatorId(null);
+            statusLog.setRemark("Payment received, tradeNo=" + tradeNo);
+            orderStatusLogMapper.insert(statusLog);
+
+            // 9. Deduct stock
+            inventoryService.deductStock(order.getSkuId(), order.getQuantity());
+
+            // 10. Audit trail
+            auditService.log(null, null, "PAYMENT", "SUCCESS", "ORDER", order.getId(), "tradeNo=" + tradeNo);
+            log.info("Payment success: orderNo={}, tradeNo={}", order.getOrderNo(), tradeNo);
+
+        } finally {
+            distributedLock.unlock(orderLockKey);
+        }
         return "success";
     }
 
